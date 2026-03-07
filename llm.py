@@ -1,5 +1,6 @@
 import requests
 import json
+import time
 
 class llm:
     def __init__(self):
@@ -9,6 +10,7 @@ class llm:
         self.headers = {
             "Content-Type": "application/json"
         }
+        self.timeout = 60  # 请求超时时间（秒）
 
     def ask_llm(self, prompt):
         data = {
@@ -16,24 +18,42 @@ class llm:
             "messages": [
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.7,
+            "temperature": 0.3,
             "stream": True
         }
 
         try:
-            response = requests.post(self.api_url, headers=self.headers, json=data, stream=True)
+            start_time = time.time()
+            response = requests.post(
+                self.api_url, 
+                headers=self.headers, 
+                json=data, 
+                stream=True,
+                timeout=self.timeout
+            )
             response.raise_for_status()
+            
             # 解析拼接
             full_content = ""  # 存储最终完整的回复内容
+            last_data_time = time.time()
 
             # 逐行读取响应流
             for line in response.iter_lines():
+                # 检查总超时
+                if time.time() - start_time > self.timeout:
+                    return {"error": f"请求超时（{self.timeout}秒）"}
+                
+                # 检查数据流超时（5秒内没有新数据）
+                if time.time() - last_data_time > 5:
+                    return {"error": "数据流超时（5秒内无新数据）"}
+                
                 # 过滤空行
                 if not line:
                     continue
                 
                 # 解码行内容，去除首尾空白
                 line_str = line.decode("utf-8").strip()
+                last_data_time = time.time()  # 更新最后数据时间
                 
                 # 过滤非data开头的行
                 if not line_str.startswith("data: "):
@@ -59,7 +79,11 @@ class llm:
                     continue
             
             return full_content
+        except requests.exceptions.Timeout:
+            return {"error": f"请求超时（{self.timeout}秒）"}
         except requests.exceptions.RequestException as e:
             return {"error": f"请求错误: {str(e)}"}
         except json.JSONDecodeError as e:
             return {"error": f"解析响应错误: {str(e)}"}
+        except Exception as e:
+            return {"error": f"未知错误: {str(e)}"}
