@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AI对话式BUG记录工具 - 重构版
+AI 对话式 BUG 记录工具 - 重构版
 """
 import os
 import json
@@ -12,17 +12,30 @@ import time
 from llm import ai_intent_recognize, ai_extract_all_fields, ai_generate_question, ai_chat, search_similar_bugs
 from ui import TerminalUI, UI
 
+
+class BugToolUI(UI):
+    """BUG 工具 UI 接口，用于 GUI 集成"""
+    
+    def output(self, text: str):
+        """核心程序调用的输出方法"""
+        self.log(text)
+    
+    def input_request(self, prompt: str = "") -> str:
+        """核心程序调用的输入方法"""
+        return self.read(prompt)
+
+
 # ==================== 常量配置 ====================
 class BugRecordConfig:
-    """BUG记录工具配置类"""
-    LLM_TIMEOUT = 100  # LLM调用超时时间
+    """BUG 记录工具配置类"""
+    LLM_TIMEOUT = 100  # LLM 调用超时时间
     AUTO_FILL_TEXT = "暂未确定"  # 兜底填充文本
-    MAX_SIMILAR_BUGS = 3  # 最多返回的相似BUG数量
-    MAX_BUGS_FOR_SEARCH = 50  # AI搜索时最多使用的历史BUG数量
+    MAX_SIMILAR_BUGS = 3  # 最多返回的相似 BUG 数量
+    MAX_BUGS_FOR_SEARCH = 50  # AI 搜索时最多使用的历史 BUG 数量
     MAX_RETRY_COUNT = 2  # 最大重试次数
     STREAM_TIMEOUT = 5  # 数据流超时时间
     
-    # BUG核心特征关键词（用于识别BUG描述）
+    # BUG 核心特征关键词（用于识别 BUG 描述）
     BUG_CORE_KEYWORDS = [
         'bug', '故障', '失败', '异常', '报错', '触发', '复现', '中断',
         '芯片', '协议', 'pd', 'ufcs', 'qc', 'otg', 'pmic', '电压', '电流',
@@ -44,19 +57,19 @@ CONFIG = BugRecordConfig()
 
 class BugDialogTool:
     def __init__(self, ui: UI = None):
-        # 新增：如果没有传入UI，默认使用终端UI
+        # 新增：如果没有传入 UI，默认使用终端 UI
         self.ui = ui if ui else TerminalUI()
         self.bugs_dir = "bug_records"
-        # 全局统一字段配置 - 适配bug_template.md模板
+        # 全局统一字段配置 - 适配 bug_template.md 模板
         self.required_fields = {
             "description": "问题现象（详细描述发生了什么，对应模板中的核心现象）",
-            "product_line": "所属产品线（如PMIC、车载充电器、移动电源等）",
-            "chip_model": "芯片型号（如SCV89601P等）",
-            "protocol_type": "协议类型（如PD3.0、PD3.1、UFCS、QC等）",
-            "severity": "严重级别（仅选Blocker/Critical/Major/Minor）",
+            "product_line": "所属产品线（如 PMIC、车载充电器、移动电源等）",
+            "chip_model": "芯片型号（如 SCV89601P 等）",
+            "protocol_type": "协议类型（如 PD3.0、PD3.1、UFCS、QC 等）",
+            "severity": "严重级别（仅选 Blocker/Critical/Major/Minor）",
             "mass_production": "是否量产环境（仅选是/否）",
             "trigger_condition": "触发条件（在什么情况下发生的，对应模板中的前置条件）",
-            "reproduce_rate": "复现概率（如100%必现、偶发、低概率等）",
+            "reproduce_rate": "复现概率（如 100% 必现、偶发、低概率等）",
             "environment": "运行环境（如温度、电压、测试工具等，对应模板中的硬件环境）",
             "root_cause_hypothesis": "初步根因假设（你觉得可能是什么原因，对应模板中的表层原因）",
             "solution_tried": "已尝试的解决方案（你已经做了什么操作，对应模板中的临时修复）"
@@ -76,32 +89,32 @@ class BugDialogTool:
         self._load_bugs_index()
     
     def _load_bugs_index(self):
-        """加载BUG记录索引"""
+        """加载 BUG 记录索引"""
         index_file = os.path.join(self.bugs_dir, "bugs_index.json")
         if os.path.exists(index_file):
             try:
                 with open(index_file, 'r', encoding='utf-8') as f:
                     self.bugs_index = json.load(f)
             except Exception as e:
-                print(f"[提示] 索引加载异常: {e}，已重置索引", flush=True)
+                self.ui.log(f"[提示] 索引加载异常：{e}，已重置索引")
                 self.bugs_index = {}
         else:
             self.bugs_index = {}
     
     def _save_bugs_index(self):
-        """保存BUG记录索引"""
+        """保存 BUG 记录索引"""
         index_file = os.path.join(self.bugs_dir, "bugs_index.json")
         with open(index_file, 'w', encoding='utf-8') as f:
             json.dump(self.bugs_index, f, ensure_ascii=False, indent=2)
     
     def _generate_bug_id(self):
-        """生成唯一BUG ID"""
+        """生成唯一 BUG ID"""
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         return f"BUG_{timestamp}"
     
-    # ==================== 核心升级：通用AI意图识别函数 ====================
+    # ==================== 核心升级：通用 AI 意图识别函数 ====================
     def _search_similar_bugs_ai(self, query_description):
-        """AI语义搜索相似BUG记录"""
+        """AI 语义搜索相似 BUG 记录"""
         return search_similar_bugs(self.bugs_index, query_description, CONFIG.MAX_SIMILAR_BUGS, CONFIG.MAX_BUGS_FOR_SEARCH, CONFIG.MAX_RETRY_COUNT)
     
     def _extract_keywords(self, text):
@@ -147,9 +160,9 @@ class BugDialogTool:
                 
                 # 生成自然的相似原因
                 if 'otg' in matched_words and '失败' in matched_words:
-                    reason = "都与OTG功能失败相关"
+                    reason = "都与 OTG 功能失败相关"
                 elif 'bc1' in matched_words and '失败' in matched_words:
-                    reason = "都与BC1.2识别失败相关"
+                    reason = "都与 BC1.2 识别失败相关"
                 elif len(matched_words) == 1:
                     reason = f"都包含{matched_words[0]}相关问题"
                 else:
@@ -212,11 +225,11 @@ class BugDialogTool:
                 updated_data[field] = CONFIG.AUTO_FILL_TEXT
         return updated_data
     
-    def _smart_input(self, prompt="你: "):
+    def _smart_input(self, prompt="你："):
         """智能输入，单行/多行都支持"""
-        print(prompt, end="", flush=True)
+        self.ui.log(prompt, end="")
         try:
-            first_line = read().strip()
+            first_line = self.ui.read().strip()
             
             # 全局退出指令优先
             if first_line.lower() in ['exit', 'quit', '取消']:
@@ -225,10 +238,10 @@ class BugDialogTool:
                 return "完成"
             # 多行模式入口
             if first_line.lower() == "multi":
-                print("📝 已进入多行输入模式，输入完成后单独一行输入###提交", flush=True)
+                self.ui.log("📝 已进入多行输入模式，输入完成后单独一行输入###提交")
                 lines = []
                 while True:
-                    line = read()
+                    line = self.ui.read()
                     if line.strip() == "###":
                         break
                     lines.append(line)
@@ -239,17 +252,17 @@ class BugDialogTool:
         except KeyboardInterrupt:
             return "exit"
         except Exception as e:
-            print(f"[错误] 输入异常: {str(e)}", flush=True)
+            self.ui.log(f"[错误] 输入异常：{str(e)}")
             return ""
     
     def _ai_extract_all_fields(self, user_input, collect_data):
-        """AI自动全字段提取，用户输入任何内容都自动匹配所有字段"""
+        """AI 自动全字段提取，用户输入任何内容都自动匹配所有字段"""
         return ai_extract_all_fields(user_input, collect_data, self.required_fields)
     
     def _print_collect_status(self, collect_data):
         """打印当前收集状态"""
-        print("\n📊 当前BUG信息收集状态：", flush=True)
-        print("-"*50, flush=True)
+        self.ui.log("\n📊 当前 BUG 信息收集状态：")
+        self.ui.log("-"*50)
         for field, field_desc in self.required_fields.items():
             field_name = field_desc.split("（")[0]
             value = collect_data[field]
@@ -259,57 +272,57 @@ class BugDialogTool:
                 status = "ℹ️  暂未确定"
             else:
                 status = "✅ 已填充"
-            print(f"{status} {field_name}: {value}", flush=True)
-        print("-"*50, flush=True)
+            self.ui.log(f"{status} {field_name}: {value}")
+        self.ui.log("-"*50)
     
     def _generate_question(self, missing_field, missing_field_name, collect_data):
         """生成自然提问"""
         return ai_generate_question(missing_field, missing_field_name, collect_data, self.required_fields[missing_field])
     
     def start_conversational_record(self, initial_description=""):
-        """用户主导的BUG记录流程"""
-        print("\n" + "="*60, flush=True)
-        print("🐞 AI对话式BUG记录助手", flush=True)
-        print("="*60, flush=True)
-        print("💡 【使用说明】", flush=True)
-        print("1. 直接输入任何BUG相关信息，AI会自动提取所有匹配的字段", flush=True)
-        print("2. 多行输入：输入multi按回车，进入多行模式，完成后单独一行输入###提交", flush=True)
-        print("3. 批量兜底：输入「其他都暂未确定」，自动填充剩余所有字段", flush=True)
-        print("4. 输入「完成」：随时终止收集，直接进入信息确认环节", flush=True)
-        print("5. 输入exit：随时退出记录\n", flush=True)
+        """用户主导的 BUG 记录流程"""
+        self.ui.log("\n" + "="*60)
+        self.ui.log("🐞 AI 对话式 BUG 记录助手")
+        self.ui.log("="*60)
+        self.ui.log("💡 【使用说明】")
+        self.ui.log("1. 直接输入任何 BUG 相关信息，AI 会自动提取所有匹配的字段")
+        self.ui.log("2. 多行输入：输入 multi 按回车，进入多行模式，完成后单独一行输入###提交")
+        self.ui.log("3. 批量兜底：输入「其他都暂未确定」，自动填充剩余所有字段")
+        self.ui.log("4. 输入「完成」：随时终止收集，直接进入信息确认环节")
+        self.ui.log("5. 输入 exit：随时退出记录\n")
         
         # 处理初始描述
         if not initial_description:
-            print("请输入BUG相关信息（可以是现象、产品线、芯片等任何内容）：", flush=True)
-            initial_description = self._smart_input(prompt="你: ")
+            self.ui.log("请输入 BUG 相关信息（可以是现象、产品线、芯片等任何内容）：")
+            initial_description = self._smart_input(prompt="你：")
             if initial_description == "exit":
-                print("❌ 已退出BUG记录", flush=True)
+                self.ui.log("❌ 已退出 BUG 记录")
                 return
             if not initial_description:
-                print("❌ 输入内容不能为空，已退出记录", flush=True)
+                self.ui.log("❌ 输入内容不能为空，已退出记录")
                 return
         
         # 初始化收集数据
         collect_data = self._init_collect_data(initial_description)
-        print("📥 正在解析初始信息...", flush=True)
+        self.ui.log("📥 正在解析初始信息...")
         collect_data = self._ai_extract_all_fields(initial_description, collect_data)
         self._print_collect_status(collect_data)
         
-        # AI语义搜索相似BUG
-        print("\n🔍 正在AI语义搜索历史相似BUG...", flush=True)
+        # AI 语义搜索相似 BUG
+        self.ui.log("\n🔍 正在 AI 语义搜索历史相似 BUG...")
         similar_bugs = self._search_similar_bugs_ai(initial_description)
         similar_info = "无"
         if similar_bugs:
-            similar_info = "已发现以下历史相似BUG供参考：\n"
+            similar_info = "已发现以下历史相似 BUG 供参考：\n"
             for bug in similar_bugs:
                 similar_info += f"- {bug['id']} ({bug.get('date', '')}): {bug['title']}\n"
-                similar_info += f"  相似原因: {bug['similarity_reason']}\n"
-            print(similar_info, flush=True)
+                similar_info += f"  相似原因：{bug['similarity_reason']}\n"
+            self.ui.log(similar_info)
         else:
-            print("✅ 未发现历史相似BUG", flush=True)
+            self.ui.log("✅ 未发现历史相似 BUG")
         
         # 核心收集循环 - 改为一次性显示所有待补充字段，并支持字段标签
-        print("\n🤖 信息收集进行中，请补充以下字段信息：", flush=True)
+        self.ui.log("\n🤖 信息收集进行中，请补充以下字段信息：")
         
         # 获取所有待补充字段列表
         missing_fields = []
@@ -319,13 +332,13 @@ class BugDialogTool:
                 missing_fields.append((field, field_name))
         
         if missing_fields:
-            print("\n📋 请补充以下字段信息（可以一次性填写多个，用换行分隔）：", flush=True)
+            self.ui.log("\n📋 请补充以下字段信息（可以一次性填写多个，用换行分隔）：")
             for i, (field, field_name) in enumerate(missing_fields, 1):
-                print(f"{i}. 【{field_name}】: ", flush=True)
+                self.ui.log(f"{i}. 【{field_name}】: ")
             
-            print("\n💡 提示：请按顺序填写上述字段，每个字段一行，完成后输入###提交", flush=True)
-            print("   或者输入exit退出，输入完成跳过（但所有字段必须填写）", flush=True)
-            print("   支持格式：字段编号: 内容 或 直接填写内容", flush=True)
+            self.ui.log("\n💡 提示：请按顺序填写上述字段，每个字段一行，完成后输入###提交")
+            self.ui.log("   或者输入 exit 退出，输入完成跳过（但所有字段必须填写）")
+            self.ui.log("   支持格式：字段编号：内容 或 直接填写内容")
             
             # 获取多行输入
             user_input_lines = []
@@ -333,10 +346,10 @@ class BugDialogTool:
                 line = self._smart_input(prompt="> ")
                 
                 if line == "exit":
-                    print("❌ 已退出BUG记录", flush=True)
+                    self.ui.log("❌ 已退出 BUG 记录")
                     return
                 if line == "完成":
-                    print("⚠️ 所有必填字段必须填写，不能跳过", flush=True)
+                    self.ui.log("⚠️ 所有必填字段必须填写，不能跳过")
                     continue
                 if line == "###":
                     break
@@ -347,7 +360,7 @@ class BugDialogTool:
             if user_input_lines:
                 processed_input = []
                 for line in user_input_lines:
-                    # 检查是否是"编号: 内容"格式
+                    # 检查是否是"编号：内容"格式
                     if re.match(r'^\d+:', line):
                         parts = line.split(':', 1)
                         if len(parts) == 2:
@@ -360,95 +373,93 @@ class BugDialogTool:
                     processed_input.append(line)
                 
                 combined_input = "\n".join(processed_input)
-                print("📥 正在解析信息...", flush=True)
+                self.ui.log("📥 正在解析信息...")
                 collect_data = self._ai_extract_all_fields(combined_input, collect_data)
                 self._print_collect_status(collect_data)
         
         # 检查是否全部完成
         if self._check_collect_complete(collect_data):
-            print("\n🎉 所有BUG信息已全部收集完成！", flush=True)
+            self.ui.log("\n🎉 所有 BUG 信息已全部收集完成！")
         else:
-            print("\n⚠️ 仍有字段未完成，请继续补充", flush=True)
+            self.ui.log("\n⚠️ 仍有字段未完成，请继续补充")
         
-        # ==================== 最终确认环节：AI意图匹配 ====================
-        print("\n" + "="*60, flush=True)
-        print("📋 最终BUG信息确认", flush=True)
-        print("="*60, flush=True)
+        # ==================== 最终确认环节：AI 意图匹配 ====================
+        self.ui.log("\n" + "="*60)
+        self.ui.log("📋 最终 BUG 信息确认")
+        self.ui.log("="*60)
         for field, field_desc in self.required_fields.items():
             field_name = field_desc.split("（")[0]
             value = collect_data[field]
-            print(f"【{field_name}】: {value}", flush=True)
+            self.ui.log(f"【{field_name}】: {value}")
         
-        # 定义可选操作
-        confirm_options = {
-            "confirm": "确认以上信息无误，保存BUG记录",
-            "modify": "修改某个字段的内容",
-            "cancel": "取消记录，不保存任何内容，返回主菜单"
-        }
+        # 定义可选操作（使用带编号的字符串格式）
+        confirm_options = """1. 确认以上信息无误，保存 BUG 记录
+2. 修改某个字段的内容
+3. 取消记录，不保存任何内容，返回主菜单"""
         
         while True:
-            user_input = read("\n请输入你的操作（确认/修改/取消）: ").strip()
+            user_input = self.ui.read("\n请输入你的操作（确认/修改/取消）: ").strip()
             # 全局退出指令优先
             if user_input.lower() in ['exit', 'quit']:
-                print("❌ 已退出BUG记录", flush=True)
+                self.ui.log("❌ 已退出 BUG 记录")
                 return
             
-            # AI意图识别
-            intent = self.ai_intent_recognize(
+            # 使用 AI 意图识别（支持中英文模糊匹配）
+            intent = ai_intent_recognize(
                 user_input=user_input,
                 options=confirm_options,
-                scene_desc="当前处于BUG记录最终确认环节，用户需要选择确认保存、修改内容、还是取消记录"
+                scene_desc="当前处于 BUG 记录最终确认环节，用户需要选择确认保存、修改内容、还是取消记录"
             )
             
-            # 处理识别结果
-            if intent == "confirm":
-                print("✅ 已确认，开始保存记录", flush=True)
+            # 处理识别结果（intent 返回的是编号字符串，如"1"、"2"、"3"）
+            if intent == "1":  # confirm
+                self.ui.log("✅ 已确认，开始保存记录")
                 break
-            elif intent == "modify":
-                print("\n📖 可修改字段列表：", flush=True)
+            elif intent == "2":  # modify
+                self.ui.log("\n📖 可修改字段列表：")
                 for field, field_desc in self.required_fields.items():
                     field_name = field_desc.split("（")[0]
-                    print(f"- {field}: {field_name}", flush=True)
-                modify_field = read("\n请输入要修改的字段名: ").strip()
+                    self.ui.log(f"- {field}: {field_name}")
+                modify_field = self.ui.read("\n请输入要修改的字段名：").strip()
                 if modify_field in self.required_fields:
                     field_name = self.required_fields[modify_field].split("（")[0]
-                    new_value = read(f"请输入【{field_name}】的新内容: ").strip()
+                    new_value = self.ui.read(f"请输入【{field_name}】的新内容：").strip()
                     collect_data[modify_field] = new_value
-                    print("✅ 修改成功，将重新展示完整信息", flush=True)
+                    self.ui.log("✅ 修改成功，将重新展示完整信息")
                     # 重新展示信息
-                    print("\n" + "="*60, flush=True)
-                    print("📋 最终BUG信息确认", flush=True)
-                    print("="*60, flush=True)
+                    self.ui.log("\n" + "="*60)
+                    self.ui.log("📋 最终 BUG 信息确认")
+                    self.ui.log("="*60)
                     for field, field_desc in self.required_fields.items():
                         field_name = field_desc.split("（")[0]
-                        print(f"【{field_name}】: {collect_data[field]}", flush=True)
+                        self.ui.log(f"【{field_name}】: {collect_data[field]}")
                 else:
-                    print("❌ 字段名不存在，请重新输入", flush=True)
-            elif intent == "cancel":
-                print("❌ 已取消BUG记录，未保存任何内容", flush=True)
+                    self.ui.log("❌ 字段名不存在，请重新输入")
+            elif intent == "3":  # cancel
+                self.ui.log("❌ 已取消 BUG 记录，未保存任何内容")
                 return
             else:
-                # AI识别失败，兜底提示
-                print("❌ 未识别到有效操作，请输入「确认」「修改」或「取消」", flush=True)
+                # AI 识别失败，兜底提示
+                self.ui.log("❌ 未识别到有效操作，请输入「确认」「修改」或「取消」")
         
-        # 保存BUG记录
+        # 保存 BUG 记录
         bug_id = self._generate_bug_id()
         self._save_bug_record(bug_id, collect_data, similar_info)
         
         # 完成提示
-        print(f"\n🎉 BUG记录已成功保存！", flush=True)
-        print(f"🆔 BUG ID: {bug_id}", flush=True)
-        print(f"📁 文件路径: {os.path.join(self.bugs_dir, f'{bug_id}.md')}", flush=True)
+        self.ui.log(f"\n🎉 BUG 记录已成功保存！")
+        self.ui.log(f"🆔 BUG ID: {bug_id}")
+        self.ui.log(f"📁 文件路径：{os.path.join(self.bugs_dir, f'{bug_id}.md')}")
         return bug_id
     
     def _save_bug_record(self, bug_id, bug_data, similar_info):
-        """保存符合bug_template.md模板的Markdown记录，更新索引"""
+        """保存符合 bug_template.md 模板的 Markdown 记录，更新索引"""
         current_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # 映射字段到模板格式
         # 对于模板中但当前数据没有的字段，使用默认值
         firmware_version = "暂未确定"  # 模板有但当前数据没有
-        reporter = "AI记录工具"  # 模板有但当前数据没有
+        reporter = "AI 记录工具"  # 模板有但当前数据没有
         secondary_effect = "暂未发现"  # 模板有但当前数据没有
         pre_condition = bug_data.get('trigger_condition', '暂未确定')
         steps = "待补充详细触发步骤"  # 模板有但当前数据没有
@@ -532,7 +543,7 @@ Root Cause 类型（勾选）：
 标签：{tags}
 
 ---
-*本记录由AI对话式BUG记录工具自动生成*
+*本记录由 AI 对话式 BUG 记录工具自动生成*
 """
         
         # 保存文件
@@ -541,7 +552,7 @@ Root Cause 类型（勾选）：
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(md_content)
         
-        # 更新索引 - 修复date字段缺失问题
+        # 更新索引 - 修复 date 字段缺失问题
         self.bugs_index[bug_id] = {
             'title': bug_data['description'][:60] + ('...' if len(bug_data['description'])>60 else ''),
             'description': bug_data['description'],
@@ -552,88 +563,88 @@ Root Cause 类型（勾选）：
         return file_path
     
     def list_all_bugs(self):
-        """列出所有BUG记录"""
+        """列出所有 BUG 记录"""
         if not self.bugs_index:
-            print("\n📭 暂无BUG记录", flush=True)
+            self.ui.log("\n📭 暂无 BUG 记录")
             return
-        print("\n📋 所有BUG记录列表：", flush=True)
-        print("-"*60, flush=True)
+        self.ui.log("\n📋 所有 BUG 记录列表：")
+        self.ui.log("-"*60)
         for bug_id, bug_info in self.bugs_index.items():
-            print(f"🆔 {bug_id}", flush=True)
-            print(f"   日期: {bug_info.get('date', '未知日期')}", flush=True)
-            print(f"   标题: {bug_info['title']}", flush=True)
-            print("-"*60, flush=True)
+            self.ui.log(f"🆔 {bug_id}")
+            self.ui.log(f"   日期：{bug_info.get('date', '未知日期')}")
+            self.ui.log(f"   标题：{bug_info['title']}")
+            self.ui.log("-"*60)
     
     def search_bugs(self, query=""):
-        """AI语义搜索BUG记录"""
+        """AI 语义搜索 BUG 记录"""
         if not query:
-            query = read("\n请输入搜索关键词或BUG描述: ").strip()
+            query = self.ui.read("\n请输入搜索关键词或 BUG 描述：").strip()
         if not query:
-            print("❌ 搜索内容不能为空", flush=True)
+            self.ui.log("❌ 搜索内容不能为空")
             return
         
-        print(f"\n🔍 正在AI语义搜索包含「{query}」的BUG记录...", flush=True)
+        self.ui.log(f"\n🔍 正在 AI 语义搜索包含「{query}」的 BUG 记录...")
         similar_bugs = self._search_similar_bugs_ai(query)
         
         if not similar_bugs:
-            print(f"\n📭 未找到相似的BUG记录", flush=True)
+            self.ui.log(f"\n📭 未找到相似的 BUG 记录")
             return
         
-        print(f"\n🔍 找到 {len(similar_bugs)} 条相似的BUG记录：", flush=True)
-        print("-"*60, flush=True)
+        self.ui.log(f"\n🔍 找到 {len(similar_bugs)} 条相似的 BUG 记录：")
+        self.ui.log("-"*60)
         for bug in similar_bugs:
-            print(f"🆔 {bug['id']}", flush=True)
-            print(f"   日期: {bug.get('date', '未知日期')}", flush=True)
-            print(f"   标题: {bug['title']}", flush=True)
-            print(f"   相似原因: {bug['similarity_reason']}", flush=True)
-            print("-"*60, flush=True)
+            self.ui.log(f"🆔 {bug['id']}")
+            self.ui.log(f"   日期：{bug.get('date', '未知日期')}")
+            self.ui.log(f"   标题：{bug['title']}")
+            self.ui.log(f"   相似原因：{bug['similarity_reason']}")
+            self.ui.log("-"*60)
     
     def get_bug_detail(self, bug_id=""):
-        """查看BUG详情（补全之前截断的代码）"""
+        """查看 BUG 详情（补全之前截断的代码）"""
         if not bug_id:
-            bug_id = read("\n请输入要查看的BUG ID: ").strip()
+            bug_id = self.ui.read("\n请输入要查看的 BUG ID: ").strip()
         if not bug_id:
-            print("❌ BUG ID不能为空", flush=True)
+            self.ui.log("❌ BUG ID 不能为空")
             return
         
         if bug_id not in self.bugs_index:
-            print(f"❌ 未找到ID为「{bug_id}」的BUG记录", flush=True)
+            self.ui.log(f"❌ 未找到 ID 为「{bug_id}」的 BUG 记录")
             return
         
-        # 文件名与ID一致
+        # 文件名与 ID 一致
         file_path = os.path.join(self.bugs_dir, f"{bug_id}.md")
         if not os.path.exists(file_path):
-            print(f"❌ BUG记录文件不存在: {file_path}", flush=True)
+            self.ui.log(f"❌ BUG 记录文件不存在：{file_path}")
             return
         
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        print(f"\n📄 BUG {bug_id} 详细记录：", flush=True)
-        print("="*60, flush=True)
-        print(content, flush=True)
-        print("="*60, flush=True)
+        self.ui.log(f"\n📄 BUG {bug_id} 详细记录：")
+        self.ui.log("="*60)
+        self.ui.log(content)
+        self.ui.log("="*60)
     
     def print_help(self):
         """打印帮助说明"""
-        print("\n" + "="*60, flush=True)
-        print("📖 BUG记录工具帮助说明", flush=True)
-        print("="*60, flush=True)
-        print("【核心指令】", flush=True)
-        print("1       进入BUG记录模式，手动记录新BUG", flush=True)
-        print("2       列出所有已保存的BUG记录", flush=True)
-        print("3       AI语义搜索相似BUG记录", flush=True)
-        print("4       查看指定BUG ID的详细记录", flush=True)
-        print("help    查看本帮助说明", flush=True)
-        print("exit    退出工具", flush=True)
-        print("\n【快速使用】", flush=True)
-        print("直接输入BUG描述，工具会先匹配历史记录，再询问是否新建", flush=True)
-        print("\n【AI智能匹配】", flush=True)
-        print("所有输入环节都支持口语化内容，AI会自动识别你的意图", flush=True)
-        print("="*60, flush=True)
+        self.ui.log("\n" + "="*60)
+        self.ui.log("📖 BUG 记录工具帮助说明")
+        self.ui.log("="*60)
+        self.ui.log("【核心指令】")
+        self.ui.log("1       进入 BUG 记录模式，手动记录新 BUG")
+        self.ui.log("2       列出所有已保存的 BUG 记录")
+        self.ui.log("3       AI 语义搜索相似 BUG 记录")
+        self.ui.log("4       查看指定 BUG ID 的详细记录")
+        self.ui.log("help    查看本帮助说明")
+        self.ui.log("exit    退出工具")
+        self.ui.log("\n【快速使用】")
+        self.ui.log("直接输入 BUG 描述，工具会先匹配历史记录，再询问是否新建")
+        self.ui.log("\n【AI 智能匹配】")
+        self.ui.log("所有输入环节都支持口语化内容，AI 会自动识别你的意图")
+        self.ui.log("="*60)
     
     def _is_valid_bug_input(self, user_input):
-        """判断用户输入是否为有效BUG描述"""
+        """判断用户输入是否为有效 BUG 描述"""
         if not user_input or len(user_input) < 3:
             return False
         input_lower = user_input.lower()
@@ -643,75 +654,111 @@ Root Cause 类型（勾选）：
         return False
     
     def chat_with_ai(self, user_input):
-        """非标准命令由AI直接回复"""
-        print(f"\n🤖 正在思考...", flush=True)
+        """非标准命令由 AI 直接回复"""
+        self.ui.log(f"\n🤖 正在思考...")
         
         try:
             response = ai_chat(user_input)
-            print(f"\nAI: {response}", flush=True)
+            self.ui.write(f"\nAI: {response}")
         except Exception as e:
-            print(f"\n❌ AI回复失败: {str(e)}", flush=True)
-            print("💡 你可以输入help查看帮助，或输入BUG描述开始记录", flush=True)
+            self.ui.log(f"\n❌ AI 回复失败：{str(e)}")
+            self.ui.log("💡 你可以输入 help 查看帮助，或输入 BUG 描述开始记录")
     
     def handle_bug_description(self, bug_description):
-        """处理用户输入的BUG描述：简单版本，不使用状态机"""
-        print(f"\n🔍 检测到BUG描述，正在匹配历史相似记录...", flush=True)
+        """处理用户输入的 BUG 描述：简单版本，不使用状态机"""
+        self.ui.log(f"\n🔍 检测到 BUG 描述，正在匹配历史相似记录...")
         
-        # AI语义匹配历史记录
+        # AI 语义匹配历史记录
         similar_bugs = self._search_similar_bugs_ai(bug_description)
         
         if similar_bugs:
-            print("\n✅ 找到以下历史相似BUG记录：", flush=True)
-            print("-"*60, flush=True)
+            self.ui.log("\n✅ 找到以下历史相似 BUG 记录：")
+            self.ui.log("-"*60)
             for idx, bug in enumerate(similar_bugs, 1):
                 similarity_percentage = bug.get('similarity_percentage', 0)
-                print(f"{idx}. 🆔 {bug['id']} | 日期: {bug['date']} | 相似度: {similarity_percentage}%", flush=True)
-                print(f"   标题: {bug['title']}", flush=True)
-                print(f"   相似原因: {bug['similarity_reason']}", flush=True)
-                print("-"*60, flush=True)
+                self.ui.log(f"{idx}. 🆔 {bug['id']} | 日期：{bug['date']} | 相似度：{similarity_percentage}%")
+                self.ui.log(f"   标题：{bug['title']}")
+                self.ui.log(f"   相似原因：{bug['similarity_reason']}")
+                self.ui.log("-"*60)
             
             # 打印操作选项
-            print("\n📋 可选操作：", flush=True)
+            bug_desc = "\n📋 可选操作：\n"
             for idx, bug in enumerate(similar_bugs, 1):
-                print(f"{idx}. 查看第{idx}条BUG的详细记录", flush=True)
-            print(f"{len(similar_bugs)+1}. 新建BUG记录", flush=True)
-            print(f"{len(similar_bugs)+2}. 返回主菜单", flush=True)
+                bug_desc += f"{idx}. 查看第{idx}条 BUG 的详细记录\n"
+            bug_desc += f"{len(similar_bugs)+1}. 新建 BUG 记录\n"
+            bug_desc += f"{len(similar_bugs)+2}. 返回主菜单\n"
+            self.ui.log(bug_desc)
             
             while True:
-                user_input = read("\n请输入你的选择: ").strip()
+                user_input = self.ui.read("\n请输入你的选择：").strip()
                 if user_input.lower() in ['exit', 'quit']:
-                    print("👋 已退出", flush=True)
+                    self.ui.log("👋 已退出")
                     return None
                 
+                # 首先检查是否为数字输入
                 if user_input.isdigit():
                     num = int(user_input)
                     if 1 <= num <= len(similar_bugs):
                         self.get_bug_detail(bug_id=similar_bugs[num-1]['id'])
                         return None
                     elif num == len(similar_bugs) + 1:
-                        print("\n📝 进入新建BUG记录模式", flush=True)
+                        self.ui.log("\n📝 进入新建 BUG 记录模式")
                         return self.start_conversational_record(initial_description=bug_description)
                     elif num == len(similar_bugs) + 2:
-                        print("\n🔙 返回主菜单", flush=True)
+                        self.ui.log("\n🔙 返回主菜单")
                         return None
                 
-                print("❌ 请输入有效的数字选择", flush=True)
+                # 使用 AI 意图识别处理文本输入（支持模糊匹配）
+                user_input_lower = user_input.strip().lower()
+                
+                # 构建场景描述
+                scene_desc = f"用户正在选择 BUG 记录操作选项，有{len(similar_bugs)}条相似 BUG 记录，需要识别用户想执行哪个操作"
+                
+                # 使用 AI 意图识别
+                try:
+                    intent = ai_intent_recognize(
+                        user_input=user_input,
+                        options=bug_desc,
+                        scene_desc=scene_desc
+                    )
+                    
+                    # AI 返回的是目标编号（字符串形式）
+                    if intent and intent.isdigit():
+                        num = int(intent)
+                        if 1 <= num <= len(similar_bugs):
+                            self.ui.log(f"✅ 识别到意图：查看第{num}条 BUG 记录")
+                            self.get_bug_detail(bug_id=similar_bugs[num-1]['id'])
+                            return None
+                        elif num == len(similar_bugs) + 1:
+                            self.ui.log("✅ 识别到意图：新建 BUG 记录")
+                            self.ui.log("\n📝 进入新建 BUG 记录模式")
+                            return self.start_conversational_record(initial_description=bug_description)
+                        elif num == len(similar_bugs) + 2:
+                            self.ui.log("✅ 识别到意图：返回主菜单")
+                            self.ui.log("\n🔙 返回主菜单")
+                            return None
+                    
+                    # AI 识别失败，兜底提示
+                    self.ui.log("❌ 未识别到有效操作，请输入数字或明确的文本选择")
+                except Exception as e:
+                    self.ui.log(f"❌ AI 意图识别失败：{str(e)}")
+                    self.ui.log("💡 请尝试输入数字选择或更明确的文本")
         else:
-            print("\n✅ 未找到相似的历史BUG记录", flush=True)
+            self.ui.log("\n✅ 未找到相似的历史 BUG 记录")
             while True:
-                user_input = read("是否需要新建BUG记录？(新建/返回): ").strip()
+                user_input = self.ui.read("是否需要新建 BUG 记录？(新建/返回): ").strip()
                 if user_input.lower() in ['exit', 'quit']:
-                    print("👋 已退出", flush=True)
+                    self.ui.log("👋 已退出")
                     return None
                 
                 if user_input == "新建" or user_input.lower() == "new":
-                    print("\n📝 进入新建BUG记录模式", flush=True)
+                    self.ui.log("\n📝 进入新建 BUG 记录模式")
                     return self.start_conversational_record(initial_description=bug_description)
                 elif user_input == "返回" or user_input.lower() == "back":
-                    print("\n🔙 返回主菜单", flush=True)
+                    self.ui.log("\n🔙 返回主菜单")
                     return None
                 
-                print("❌ 请输入「新建」或「返回」", flush=True)
+                self.ui.log("❌ 请输入「新建」或「返回」")
         
         return None
 
@@ -719,62 +766,57 @@ class BugRecord():
     def __init__(self, ui: UI = None):
         self.tool = BugDialogTool(ui)
 
-    def run(self):
+    def run(self, user_input):
         # 正常模式，等待用户输入
-        user_input = self.tool.ui.read().strip()
+        user_input = user_input.strip()
         user_input_lower = user_input.lower()
         
-        # 主菜单AI意图识别
-        main_menu_options = {
-            "list": "列出所有已保存的BUG记录",
-            "detail": "查看指定BUG ID的详细记录",
-            "help": "查看帮助说明、功能列表、你能做什么、有什么功能、使用说明",
-            "exit": "退出工具"
-        }
+        if (user_input_lower == ""):
+            return
+        # 主菜单 AI 意图识别（使用带编号的字符串格式）
+        main_menu_options = """1. 列出所有已保存的 BUG 记录
+2. 查看指定 BUG ID 的详细记录
+3. 查看帮助说明、功能列表、你能做什么、有什么功能、使用说明
+4. 退出工具"""
         
         main_intent = ai_intent_recognize(
             user_input=user_input,
             options=main_menu_options,
-            scene_desc="当前处于BUG记录工具主菜单，用户可以选择查看列表、查看详情、查看帮助、退出工具或者其他"
+            scene_desc="当前处于 BUG 记录工具主菜单，用户可以选择查看列表、查看详情、查看帮助、退出工具或者其他"
         )
         
-        # 处理主菜单意图识别结果
-        if main_intent == "list":
+        # 处理主菜单意图识别结果（现在返回的是数字编号）
+        if main_intent == "1":  # list
             self.tool.list_all_bugs()
             return
-        elif main_intent == "detail":
+        elif main_intent == "2":  # detail
             self.tool.get_bug_detail()
             return
-        elif main_intent == "help":
+        elif main_intent == "3":  # help
             self.tool.print_help()
             return
-        elif main_intent == "exit":
-            print("👋 感谢使用，再见！", flush=True)
+        elif main_intent == "4":  # exit
+            self.ui.log("👋 感谢使用，再见！")
             return
         
-        # 核心逻辑：判断是否为BUG描述
+        # 核心逻辑：判断是否为 BUG 描述
         if self.tool._is_valid_bug_input(user_input):
-            # 直接处理BUG描述，不使用状态机
+            # 直接处理 BUG 描述，不使用状态机
             self.tool.handle_bug_description(bug_description=user_input)
         else:
-            # 非BUG描述，走AI闲聊
+            # 非 BUG 描述，走 AI 闲聊
             self.tool.chat_with_ai(user_input)
     
 if __name__ == "__main__":
     ui = TerminalUI()
     bugrecord = BugRecord(ui)
     
-    print("🐞 BUG记录工具已启动，输入help查看帮助")
-    print("提示：使用异步输入系统，可以外部推送输入")
+    ui.log("🐞 BUG 记录工具已启动，输入 help 查看帮助")
+    ui.log("提示：使用异步输入系统，可以外部推送输入")
     
     while True:
         # 使用异步输入
-        user_input = input("\nBUG工具> ")
-        ui.push_input(user_input)
-        print(user_input)
+        user_input = input("\nBUG 工具> ")
+        # ui.push_input(user_input)
         
-        if user_input:
-            bugrecord.run()
-        else:
-            # 没有输入时短暂休眠，避免CPU占用过高
-            time.sleep(0.1)
+        bugrecord.run(user_input)

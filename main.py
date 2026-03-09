@@ -1,114 +1,173 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+BUG记录工具 - GUI 完整版
+完美兼容修复后的core代码，支持闲聊、指令、BUG记录全功能
+"""
+import tkinter as tk
+from tkinter import ttk, scrolledtext
+import threading
+import queue
 import sys
-import re
-import signal
-import time
-from llm import llm
-from control import click, write, press, hotkey
-from terminal_tool import run
+import os
 
-# 信号处理函数，用于优雅退出
-def signal_handler(sig, frame):
-    print("\n程序已退出")
-    sys.exit(0)
+# 导入核心模块
+sys.path.append(os.path.dirname(__file__))
+from bug_record_core import BugDialogTool, BugToolUI
 
-signal.signal(signal.SIGINT, signal_handler)
+class TextRedirector:
+    """标准输出/错误重定向器，用于劫持print输出"""
+    def __init__(self, text_widget, tag: str = "stdout"):
+        self.text_widget = text_widget
+        self.tag = tag
 
-system_prompt = ""
-try:
-    with open('prompt.txt', 'r', encoding='utf-8') as file:
-        system_prompt = file.read()
-    print(system_prompt)
-except Exception as e:
-    print(f"读取提示文件失败: {e}")
-    sys.exit(1)
+    def write(self, text: str):
+        if text.strip():
+            self.text_widget.config(state=tk.NORMAL)
+            self.text_widget.insert(tk.END, text, (self.tag,))
+            self.text_widget.see(tk.END)
+            self.text_widget.config(state=tk.DISABLED)
 
-llm = llm()
-print("AI控制代理已启动，输入 'exit' 或 'quit' 退出程序")
-print("输入 Ctrl+C 也可以退出程序")
+    def flush(self):
+        pass
 
-while True:
-    try:
-        task = input("task> ").strip()
-        
-        # 退出机制
-        if task.lower() in ['exit', 'quit']:
-            print("退出程序")
-            break
-        if task == "":
-            continue
+class BugToolGUI(BugToolUI):
+    """GUI界面实现，完全兼容BugToolUI接口"""
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title("🐞 AI BUG 记录工具")
+        self.root.geometry("1000x700")
+        self.root.minsize(800, 500)
 
-        prompt = system_prompt + "\nTask:" + task
-        print("正在处理任务...")
+        # 线程安全队列：用于输入请求和结果传递
+        self.result_queue = queue.Queue()
+        self.input_prompt = ""
 
-        # 添加超时机制
-        response = llm.ask_llm(prompt)
-        
-        if isinstance(response, dict) and 'error' in response:
-            print(f"AI请求错误: {response['error']}")
-            continue
+        # 构建UI界面
+        self._setup_ui()
 
-        match = re.search(r'(cmd:.*|click \d+ \d+|type .+|press \w+|hotkey .+)', response)
+        # 保存原始标准流
+        self.original_stdout = sys.stdout
+        self.original_stderr = sys.stderr
 
-        if match:
-            response = match.group(0)
+    def _setup_ui(self):
+        """构建UI界面"""
+        # 全局字体配置
+        default_font = ("Microsoft YaHei", 10)
+        code_font = ("Consolas", 10)
+
+        # 1. 顶部标题栏
+        top_bar = ttk.Frame(self.root, padding="10 5 10 5")
+        top_bar.pack(side=tk.TOP, fill=tk.X)
+        ttk.Label(top_bar, text="AI BUG 记录工具", font=("Microsoft YaHei", 14, "bold")).pack(side=tk.LEFT)
+
+        # 2. 输出文本区域
+        log_frame = ttk.LabelFrame(self.root, text="程序输出", padding="10")
+        log_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        self.text_area = scrolledtext.ScrolledText(
+            log_frame, wrap=tk.WORD, font=code_font, state=tk.DISABLED
+        )
+        self.text_area.pack(fill=tk.BOTH, expand=True)
+
+        # 配置文本颜色标签
+        self.text_area.tag_config("stdout", foreground="black")
+        self.text_area.tag_config("stderr", foreground="red")
+        self.text_area.tag_config("input", foreground="#0066cc", font=(code_font[0], code_font[1], "bold"))
+
+        # 3. 底部输入区域
+        input_frame = ttk.Frame(self.root, padding="10")
+        input_frame.pack(side=tk.BOTTOM, fill=tk.X)
+
+        ttk.Label(input_frame, text="输入:", font=default_font).pack(side=tk.LEFT, padx=5)
+
+        self.entry = ttk.Entry(input_frame, font=default_font)
+        self.entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.entry.bind("<Return>", self._on_submit)
+
+        self.send_btn = ttk.Button(input_frame, text="发送", command=self._on_submit)
+        self.send_btn.pack(side=tk.LEFT, padx=5)
+
+        # 初始禁用输入，等待核心程序请求
+        self._set_input_enabled(False)
+
+    def _set_input_enabled(self, enabled: bool):
+        """设置输入框状态"""
+        if enabled:
+            self.entry.config(state=tk.NORMAL)
+            self.send_btn.config(state=tk.NORMAL)
+            self.entry.focus_set()
         else:
-            print(f"无法解析AI响应: {response}")
-            continue
+            self.entry.config(state=tk.DISABLED)
+            self.send_btn.config(state=tk.DISABLED)
 
-        print("AI action:", response)
+    def _on_submit(self, event=None):
+        """提交输入内容"""
+        user_text = self.entry.get()
+        self.entry.delete(0, tk.END)
 
-        if response.startswith("cmd:"):
-            cmd = response.replace("cmd:", "").strip()
-            print(f"执行命令: {cmd}")
-            
-            try:
-                output = run(cmd)
-                if output:
-                    print(f"命令输出: {output}")
-            except Exception as e:
-                print(f"命令执行失败: {e}")
+        # 回显输入内容
+        self._append_text(f"{user_text}\n", "input")
 
-        else:
-            parts = response.split()
-            if len(parts) < 2:
-                print("无效的操作格式")
-                continue
+        # 禁用输入
+        self._set_input_enabled(False)
 
-            try:
-                if parts[0] == "click":
-                    if len(parts) >= 3:
-                        click(int(parts[1]), int(parts[2]))
-                        print(f"点击位置: ({parts[1]}, {parts[2]})")
-                    else:
-                        print("点击操作需要x和y坐标")
+        # 将结果放入队列，传递给等待的核心线程
+        try:
+            self.result_queue.put(user_text, block=False)
+        except queue.Full:
+            pass
 
-                elif parts[0] == "type":
-                    text = " ".join(parts[1:])
-                    write(text)
-                    print(f"输入文本: {text}")
+    def _append_text(self, text: str, tag: str = "stdout"):
+        """向文本区域追加内容"""
+        self.text_area.config(state=tk.NORMAL)
+        self.text_area.insert(tk.END, text, (tag,))
+        self.text_area.see(tk.END)
+        self.text_area.config(state=tk.DISABLED)
 
-                elif parts[0] == "press":
-                    press(parts[1])
-                    print(f"按下按键: {parts[1]}")
+    # ------------------- 实现BugToolUI接口 -------------------
+    def output(self, text: str):
+        """核心程序调用的输出方法"""
+        self._append_text(text, "stdout")
 
-                elif parts[0] == "hotkey":
-                    if len(parts) >= 2:
-                        hotkey(*parts[1:])
-                        print(f"组合键: {'+'.join(parts[1:])}")
-                    else:
-                        print("组合键操作需要至少一个按键")
+    def input(self, prompt: str = "") -> str:
+        """核心程序调用的输入方法（会阻塞子线程）"""
+        # 显示提示语
+        if prompt:
+            self._append_text(prompt, "stdout")
+        
+        # 在主线程激活输入框
+        self.root.after(0, lambda: self._set_input_enabled(True))
+        
+        # 阻塞等待用户输入（子线程中运行，不影响GUI）
+        return self.result_queue.get()
 
-                else:
-                    print(f"未知操作: {parts[0]}")
+def main():
+    """GUI程序入口"""
+    root = tk.Tk()
+    gui = BugToolGUI(root)
 
-            except Exception as e:
-                print(f"操作执行失败: {e}")
+    # 劫持标准输出和错误输出，所有print都会显示在GUI中
+    sys.stdout = TextRedirector(gui.text_area, "stdout")
+    sys.stderr = TextRedirector(gui.text_area, "stderr")
 
-    except KeyboardInterrupt:
-        print("\n程序被用户中断")
-        break
-    except Exception as e:
-        print(f"发生未知错误: {e}")
-        continue
+    # 核心业务逻辑线程（避免阻塞GUI主循环）
+    def run_core_logic():
+        try:
+            # 实例化工具，传入GUI作为UI
+            tool = BugDialogTool(ui=gui)
+            # 直接运行核心主循环
+            tool.run()
+        except Exception as e:
+            print(f"\n[系统错误] 程序运行异常: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
 
-print("程序结束")
+    # 启动核心线程
+    threading.Thread(target=run_core_logic, daemon=True).start()
+
+    # 启动GUI主循环
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()

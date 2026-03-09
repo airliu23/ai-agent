@@ -1,141 +1,197 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+LLM 模块 - AI 大语言模型集成
+提供 AI 对话、意图识别、信息提取等功能
+
+安全提示：API Key 通过环境变量 LLM_API_KEY 或 .env 文件配置
+"""
+import os
+import re
 import requests
 import json
 import time
 import re
 import threading
+from typing import Optional, Dict, List, Union
+
 
 class TimeoutException(Exception):
     """超时异常"""
     pass
 
-# 配置常量类
-class LLMConfig:
-    """LLM配置类"""
-    LLM_TIMEOUT = 100  # LLM调用超时时间
-    MAX_RETRY_COUNT = 2  # 最大重试次数
 
-CONFIG = LLMConfig()
+class LLMConfig:
+    """LLM 配置类"""
+    LLM_TIMEOUT = 100  # LLM 调用超时时间（秒）
+    MAX_RETRY_COUNT = 2  # 最大重试次数
+    REQUEST_TIMEOUT = 60  # 请求超时时间（秒）
+    DEFAULT_MODEL = "qwen3.5-plus"
+    DEFAULT_API_URL = "https://agent.southchips.net/api/ai/open/v1/chat/completions"
+
+
+def _load_env_from_file(env_file=".env"):
+    """
+    从 .env 文件加载环境变量（支持 export 格式）
+    
+    Args:
+        env_file: .env 文件路径
+    """
+    if not os.path.exists(env_file):
+        return
+    
+    try:
+        with open(env_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                # 跳过注释和空行
+                if not line or line.startswith('#'):
+                    continue
+                # 支持 export 格式：export KEY=value
+                if line.startswith('export '):
+                    line = line[7:]
+                # 解析 KEY=value
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    key = key.strip()
+                    # 移除引号
+                    value = value.strip().strip('"').strip("'")
+                    # 只设置尚未存在的环境变量
+                    if key not in os.environ:
+                        os.environ[key] = value
+    except Exception as e:
+        print(f"[警告] 读取.env 文件失败：{e}")
+
+
+# 在模块加载时从 .env 文件加载环境变量
+_load_env_from_file()
+
 
 class LLMClass:
-    def __init__(self):
-        self.api_url = "https://model.southchips.net/v1/chat/completions"
-        # self.api_url = "https://127.0.0.1"
-        self.model_path = "DeepSeek-V3.1-Terminus"
+    """LLM 客户端类"""
+    
+    def __init__(self, api_key: Optional[str] = None, api_url: Optional[str] = None, 
+                 model: Optional[str] = None):
+        """
+        初始化 LLM 客户端
+        
+        Args:
+            api_key: API 密钥，默认从环境变量 LLM_API_KEY 或 .env 文件读取
+            api_url: API 地址，默认使用配置文件中的地址
+            model: 模型名称，默认使用 qwen3.5-plus
+        """
+        self.api_url = api_url or LLMConfig.DEFAULT_API_URL
+        self.model_path = model or LLMConfig.DEFAULT_MODEL
+        
+        # 从参数或环境变量获取 API Key（支持 .env 文件）
+        self.api_key = api_key or os.environ.get("LLM_API_KEY", "")
+        
+        if not self.api_key:
+            print("[警告] 未设置 API Key，请配置环境变量 LLM_API_KEY 或在 .env 文件中设置")
+        
         self.headers = {
+            "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        self.timeout = 60  # 请求超时时间（秒）
+        self.timeout = LLMConfig.REQUEST_TIMEOUT
 
-    def ask_llm(self, prompt):
+    def ask_llm(self, prompt: str, system_prompt: str = "You are a helpful assistant.") -> Union[str, Dict]:
+        """
+        向 LLM 发送请求并获取回复
+        
+        Args:
+            prompt: 用户提示内容
+            system_prompt: 系统提示词
+            
+        Returns:
+            成功时返回回复内容字符串，失败时返回包含 error 字段的字典
+        """
         data = {
             "model": self.model_path,
             "messages": [
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.3,
-            "stream": True
+            "stream": False
         }
 
         try:
-            start_time = time.time()
             response = requests.post(
                 self.api_url, 
                 headers=self.headers, 
                 json=data, 
-                stream=True,
                 timeout=self.timeout
             )
             response.raise_for_status()
             
-            # 解析拼接
-            full_content = ""  # 存储最终完整的回复内容
-            last_data_time = time.time()
-
-            # 逐行读取响应流
-            for line in response.iter_lines():
-                # 检查总超时
-                if time.time() - start_time > self.timeout:
-                    return {"error": f"请求超时（{self.timeout}秒）"}
-                
-                # 检查数据流超时（5秒内没有新数据）
-                if time.time() - last_data_time > 5:
-                    return {"error": "数据流超时（5秒内无新数据）"}
-                
-                # 过滤空行
-                if not line:
-                    continue
-                
-                # 解码行内容，去除首尾空白
-                line_str = line.decode("utf-8").strip()
-                last_data_time = time.time()  # 更新最后数据时间
-                
-                # 过滤非data开头的行
-                if not line_str.startswith("data: "):
-                    continue
-                
-                # 提取data: 后面的内容
-                data_str = line_str[len("data: "):].strip()
-                
-                # 结束标识，退出循环
-                if data_str == "[DONE]":
-                    break
-                
-                # 解析JSON，提取增量内容
-                try:
-                    chunk = json.loads(data_str)
-                    # 提取增量文本片段
-                    delta_content = chunk["choices"][0]["delta"].get("content", "")
-                    if delta_content:  # 过滤空内容
-                        full_content += delta_content
-                except Exception as e:
-                    # 跳过解析失败的块，避免程序崩溃
-                    print(f"\n解析块失败: {e}, 块内容: {data_str}")
-                    continue
+            result = response.json()
             
-            return full_content
+            if "choices" in result and len(result["choices"]) > 0:
+                content = result["choices"][0].get("message", {}).get("content", "")
+                return content
+            else:
+                return {"error": "API 响应格式异常，未找到有效回复内容"}
+                
         except requests.exceptions.Timeout:
             return {"error": f"请求超时（{self.timeout}秒）"}
         except requests.exceptions.RequestException as e:
-            return {"error": f"请求错误: {str(e)}"}
+            return {"error": f"请求错误：{str(e)}"}
         except json.JSONDecodeError as e:
-            return {"error": f"解析响应错误: {str(e)}"}
+            return {"error": f"解析响应错误：{str(e)}"}
         except Exception as e:
-            return {"error": f"未知错误: {str(e)}"}
+            return {"error": f"未知错误：{str(e)}"}
 
-    def _extract_json_from_text(self, text):
-        """强鲁棒性JSON提取，彻底解决格式报错"""
+    def _extract_json_from_text(self, text: str) -> Optional[Union[List, Dict]]:
+        """
+        从文本中提取 JSON 数据
+        
+        Args:
+            text: 包含 JSON 的文本
+            
+        Returns:
+            解析后的 JSON 对象（列表或字典），失败返回 None
+        """
         if not text or not isinstance(text, str):
             return None
         
         text = text.strip()
-        # 优先匹配数组（相似BUG搜索需要）
-        array_pattern = r'\[[\s\S]*\]'
-        array_matches = re.findall(array_pattern, text)
-        for match in array_matches:
+        
+        # 优先匹配数组
+        for match in re.findall(r'\[[\s\S]*\]', text):
             try:
                 match = re.sub(r',\s*([}\]])', r'\1', match)
                 parsed = json.loads(match)
                 if isinstance(parsed, list):
                     return parsed
-            except:
+            except json.JSONDecodeError:
                 continue
         
-        # 匹配JSON对象
-        obj_pattern = r'\{[\s\S]*\}'
-        obj_matches = re.findall(obj_pattern, text)
-        for match in obj_matches:
+        # 匹配对象
+        for match in re.findall(r'\{[\s\S]*\}', text):
             try:
                 match = re.sub(r',\s*([}\]])', r'\1', match)
                 parsed = json.loads(match)
                 if isinstance(parsed, dict):
                     return parsed
-            except:
+            except json.JSONDecodeError:
                 continue
         
         return None
     
-    def _llm_call_with_timeout(self, prompt):
-        """带超时的LLM调用，避免永久卡死"""
+    def _llm_call_with_timeout(self, prompt) -> str:
+        """
+        带超时的 LLM 调用
+        
+        Args:
+            prompt: 提示内容
+            
+        Returns:
+            LLM 回复内容
+            
+        Raises:
+            TimeoutException: 超时异常
+            ValueError: 返回空内容异常
+        """
         result = None
         exception = None
 
@@ -148,51 +204,60 @@ class LLMClass:
 
         thread = threading.Thread(target=llm_worker, daemon=True)
         thread.start()
-        thread.join(timeout=CONFIG.LLM_TIMEOUT)
+        thread.join(timeout=LLMConfig.LLM_TIMEOUT)
 
         if thread.is_alive():
-            raise TimeoutException(f"LLM调用超时，超过{CONFIG.LLM_TIMEOUT}秒无响应")
+            raise TimeoutException(f"LLM 调用超时，超过{LLMConfig.LLM_TIMEOUT}秒无响应")
         if exception:
             raise exception
         if not result:
-            raise ValueError("LLM返回空内容")
+            raise ValueError("LLM 返回空内容")
         return result
     
     def _call_llm_safely(self, prompt, expected_format="json"):
-        """安全调用LLM，带超时、重试、强鲁棒性解析"""
-        for retry in range(CONFIG.MAX_RETRY_COUNT):
+        """
+        安全调用 LLM，带超时、重试、鲁棒性解析
+        
+        Args:
+            prompt: 提示内容
+            expected_format: 期望格式 "json" 或 "text"
+            
+        Returns:
+            解析后的结果，失败返回 None
+        """
+        for retry in range(LLMConfig.MAX_RETRY_COUNT):
             try:
                 response = self._llm_call_with_timeout(prompt)
                 if expected_format == "json":
                     parsed_data = self._extract_json_from_text(response)
                     if parsed_data is None:
-                        raise ValueError("未找到有效JSON格式内容")
+                        raise ValueError("未找到有效 JSON 格式内容")
                     return parsed_data
                 else:
                     return response.strip()
             except Exception as e:
-                print(f"[警告] 第{retry+1}次调用失败: {str(e)}", flush=True)
-                if retry < CONFIG.MAX_RETRY_COUNT - 1:
-                    print("[进度] 2秒后重试...", flush=True)
+                print(f"[警告] 第{retry+1}次调用失败：{str(e)}", flush=True)
+                if retry < LLMConfig.MAX_RETRY_COUNT - 1:
+                    print("[进度] 2 秒后重试...", flush=True)
                     time.sleep(2)
         
-        print(f"[错误] AI调用多次失败", flush=True)
+        print(f"[错误] AI 调用多次失败", flush=True)
         return None
 
 llm_instance = LLMClass()
 
 def ai_extract_all_fields(user_input, collect_data, required_fields):
-    """AI自动全字段提取，用户输入任何内容都自动匹配所有字段"""
+    """AI 自动全字段提取，用户输入任何内容都自动匹配所有字段"""
     filled_fields = [k for k, v in collect_data.items() if v != "待补充"]
     
     prompt = f"""
-你是一个专业的BUG信息提取专家，从用户输入中提取BUG信息，更新JSON数据。
+你是一个专业的 BUG 信息提取专家，从用户输入中提取 BUG 信息，更新 JSON 数据。
 
 【核心规则】
 1. 已填充字段：{filled_fields}，绝对不要修改、覆盖
 2. 仅处理"待补充"的字段，用户没提到的保持"待补充"
 3. 所有字段都是必填项，不能使用"暂未确定"等兜底表述
-4. 仅输出更新后的完整JSON，不要其他任何内容
+4. 仅输出更新后的完整 JSON，不要其他任何内容
 
 【字段说明】
 {json.dumps(required_fields, ensure_ascii=False, indent=2)}
@@ -219,7 +284,7 @@ def ai_extract_all_fields(user_input, collect_data, required_fields):
 def ai_generate_question(missing_field, missing_field_name, collect_data, field_description):
     """生成自然提问"""
     prompt = f"""
-你是专业的嵌入式BUG记录助手，为缺失的字段生成简洁自然的提问。
+你是专业的嵌入式 BUG 记录助手，为缺失的字段生成简洁自然的提问。
 【缺失字段】{missing_field}，说明：{field_description}
 【已有信息】{json.dumps(collect_data, ensure_ascii=False)}
 【要求】仅输出提问本身，不要其他内容，简洁口语化
@@ -228,31 +293,34 @@ def ai_generate_question(missing_field, missing_field_name, collect_data, field_
     return question if question else f"请补充一下{missing_field_name}："
 
 def ai_chat(user_input):
-    """AI闲聊功能"""
+    """AI 闲聊功能"""
     prompt = f"""
-你是专业的BUG记录工具助手，也可以和用户友好闲聊。
+你是专业的 BUG 记录工具助手，也可以和用户友好闲聊。
 【用户输入】{user_input}
-【要求】回复简洁友好，不超过300字，纯文本，不要Markdown格式。如果用户问的是BUG相关问题，引导使用工具功能。
+【要求】回复简洁友好，不超过 300 字，纯文本，不要 Markdown 格式。如果用户问的是 BUG 相关问题，引导使用工具功能。
 """
     try:
         response = llm_instance._llm_call_with_timeout(prompt)
+        # 处理可能返回的错误字典
+        if isinstance(response, dict):
+            return f"AI 服务不可用：{response.get('error', '未知错误')}"
         response = response.strip()
         if len(response) > 500:
             response = response[:500] + "..."
         return response
     except Exception as e:
-        return f"AI回复失败: {str(e)}"
+        return f"AI 回复失败：{str(e)}"
 
 def search_similar_bugs(bugs_index, query_description, max_similar_bugs, max_bugs_for_search, max_retry_count):
     """
-    优化版AI语义搜索：生成自然的相似原因，不再生硬罗列关键词
+    优化版 AI 语义搜索：生成自然的相似原因，不再生硬罗列关键词
     """
     if not bugs_index:
         return []
     
-    print("[进度] 正在AI语义匹配历史BUG记录...", flush=True)
+    print("[进度] 正在 AI 语义匹配历史 BUG 记录...", flush=True)
     
-    # 准备历史BUG简要信息
+    # 准备历史 BUG 简要信息
     all_bugs_summary = []
     for bug_id, bug_info in bugs_index.items():
         all_bugs_summary.append({
@@ -266,52 +334,52 @@ def search_similar_bugs(bugs_index, query_description, max_similar_bugs, max_bug
         all_bugs_summary = all_bugs_summary[-max_bugs_for_search:]
     
     prompt = f"""
-你是一个专业的BUG分析专家，从历史BUG中找出与当前描述最相似的{max_similar_bugs}个记录，并给出相似度百分比。
+你是一个专业的 BUG 分析专家，从历史 BUG 中找出与当前描述最相似的{max_similar_bugs}个记录，并给出相似度百分比。
 
-【当前BUG描述】
+【当前 BUG 描述】
 {query_description}
 
-【历史BUG列表】
+【历史 BUG 列表】
 {json.dumps(all_bugs_summary, ensure_ascii=False, indent=2)}
 
 【严格规则】
-1. 仅输出JSON数组，每个元素包含id、title、description、date、similarity_reason、similarity_percentage
-2. similarity_reason要用自然语言描述，比如「都与OTG功能失败相关」，不要罗列关键词
-3. similarity_percentage是0-100的整数，表示相似度百分比
-4. 没有相似BUG就输出空数组[]，仅输出JSON，不要其他任何内容
-5. 严格JSON格式，不能有语法错误
+1. 仅输出 JSON 数组，每个元素包含 id、title、description、date、similarity_reason、similarity_percentage
+2. similarity_reason 要用自然语言描述，比如「都与 OTG 功能失败相关」，不要罗列关键词
+3. similarity_percentage 是 0-100 的整数，表示相似度百分比
+4. 没有相似 BUG 就输出空数组 []，仅输出 JSON，不要其他任何内容
+5. 严格 JSON 格式，不能有语法错误
 
 【输出格式】
 [
     {{
         "id": "BUG_XXXXXX",
-        "title": "BUG标题",
-        "description": "BUG描述",
-        "date": "BUG日期",
+        "title": "BUG 标题",
+        "description": "BUG 描述",
+        "date": "BUG 日期",
         "similarity_reason": "自然语言描述的相似原因",
         "similarity_percentage": 85
     }}
 ]
 """
-    # 调用LLM
+    # 调用 LLM
     ai_result = None
     for retry in range(max_retry_count):
         try:
-            print(f"[进度] 正在调用AI（第{retry+1}次）...", flush=True)
+            print(f"[进度] 正在调用 AI（第{retry+1}次）...", flush=True)
             response = llm_instance._llm_call_with_timeout(prompt)
             ai_result = llm_instance._extract_json_from_text(response)
             if isinstance(ai_result, list):
-                print("[进度] AI语义匹配完成！", flush=True)
+                print("[进度] AI 语义匹配完成！", flush=True)
                 break
         except Exception as e:
-            print(f"[警告] 第{retry+1}次匹配失败: {str(e)}", flush=True)
+            print(f"[警告] 第{retry+1}次匹配失败：{str(e)}", flush=True)
             if retry < max_retry_count -1:
-                print("[进度] 2秒后重试...", flush=True)
+                print("[进度] 2 秒后重试...", flush=True)
                 time.sleep(2)
     
-    # AI调用失败，返回空列表
+    # AI 调用失败，返回空列表
     if ai_result is None:
-        print("[提示] AI语义匹配失败", flush=True)
+        print("[提示] AI 语义匹配失败", flush=True)
         return []
     
     # 格式化返回结果
@@ -330,7 +398,7 @@ def search_similar_bugs(bugs_index, query_description, max_similar_bugs, max_bug
                     "similarity_percentage": bug.get("similarity_percentage", 0)
                 })
     except Exception as e:
-        print(f"[提示] AI结果解析异常: {e}", flush=True)
+        print(f"[提示] AI 结果解析异常：{e}", flush=True)
         return []
     
     return similar_bugs[:max_similar_bugs]
@@ -338,50 +406,54 @@ def search_similar_bugs(bugs_index, query_description, max_similar_bugs, max_bug
 
 def ai_intent_recognize(user_input, options, scene_desc):
     """
-    通用AI意图识别：所有用户输入都通过这个函数匹配操作
+    通用 AI 意图识别：所有用户输入都通过 AI 匹配操作（不使用本地字典匹配）
     :param user_input: 用户输入的文本
-    :param options: 可选操作字典，格式：{"操作指令": "操作描述"}
-    :param scene_desc: 当前场景描述，告诉AI当前在做什么
-    :return: 匹配到的操作指令，匹配失败返回None
+    :param options: 可选操作字典，格式：{"操作指令": "目标值"}，目标值可以是数字或其他标识
+    :param scene_desc: 当前场景描述，告诉 AI 当前在做什么
+    :return: 匹配到的目标值（字符串形式），匹配失败返回 None
     """
     if not user_input or not options:
         return None
     
-    # 先做快速匹配：用户输入直接匹配指令key，不走AI，提升速度
-    input_lower = user_input.strip().lower()
-    for cmd in options.keys():
-        if input_lower == cmd.lower():
-            return cmd
-    
-    # 快速匹配失败，走AI意图识别
     prompt = f"""
-你是一个专业的用户意图识别专家，需要根据用户输入，匹配最符合的操作指令。
+你是一个专业的用户意图识别专家，需要根据用户输入，匹配最符合的操作编号。
 
 【当前场景】
 {scene_desc}
 
-【可选操作指令及说明】
-{json.dumps(options, ensure_ascii=False, indent=2)}
+【可选操作及编号】
+{options}
 
 【用户输入】
 {user_input}
 
 【重要规则】
-1. 如果是普通的问候语（如你好、hello、hi等），应该返回"none"，因为这些不是功能指令
-2. 如果用户输入与BUG相关（包含bug、故障、失败、异常等关键词），应该返回"none"，让系统走BUG描述处理流程
-3. 仅当用户明确表达想要执行某个功能时，才返回对应的操作指令
+1. 如果是普通的问候语（如你好、hello、hi 等），应该返回"none"，因为这些不是功能指令
+2. 如果用户输入与 BUG 相关（包含 bug、故障、失败、异常等关键词），应该返回"none"，让系统走 BUG 描述处理流程
+3. 支持中英文模糊匹配和同义词识别，**关键词优先匹配**：
+   - 输入包含"新建"、"创建"、"新增"、"添加"、"new"、"create"等词 → 必须匹配"新建"操作
+   - 输入包含"返回"、"回去"、"退出"、"back"、"return"、"主菜单"等词 → 必须匹配"返回"操作
+   - 输入包含"确认"、"yes"、"y"、"ok"、"okay"、"sure"、"好的"、"没问题"等词 → 必须匹配"确认"操作
+   - 输入包含"修改"、"change"、"edit"、"modify"、"改一下"等词 → 必须匹配"修改"操作
+   - 输入包含"取消"、"no"、"n"、"cancel"、"quit"、"不了"、"不要"等词 → 必须匹配"取消"操作
+   - 只有当输入包含"第一"、"第 1"、"第一个"、"第一条"等明确序号时 → 才匹配查看对应序号的操作
 4. 如果完全匹配不到任何操作，仅输出"none"，不要输出其他内容
-5. 绝对不要输出任何解释、备注、标点符号，仅输出指令或"none"
 """
     try:
-        # 调用AI，超时时间缩短，提升响应速度
+        # 调用 AI，超时时间缩短，提升响应速度
         result = llm_instance._llm_call_with_timeout(prompt).strip().lower()
-        # 校验返回结果是否在可选指令里
-        for cmd in options.keys():
-            if result == cmd.lower():
-                return cmd
-        # 匹配失败返回None
+        
+        # 如果是"none"或者无效结果，返回 None
+        if result == "none":
+            return None
+
+        return str(result)
+
+    except Exception:
+        # AI 调用失败，返回 None，走兜底逻辑
         return None
-    except:
-        # AI调用失败，返回None，走兜底逻辑
-        return None
+
+
+if __name__ == "__main__":
+    llm = LLMClass()
+    print(llm.ask_llm("介绍你自己，说明版本信息"))
