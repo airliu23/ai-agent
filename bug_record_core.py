@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AI 对话式 BUG 记录工具 - 重构版
+AI 对话式 BUG 记录工具 - 重构优化版
+优化内容：统一常量配置、添加类型注解、改进错误处理
 """
 import os
 import json
 import re
 import datetime
-import sys
-import time
-from llm import ai_intent_recognize, ai_extract_all_fields, ai_generate_question, ai_chat, search_similar_bugs
+from typing import Dict, List, Optional, Any
+from llm import (
+    ai_intent_recognize, 
+    ai_extract_all_fields, 
+    ai_generate_question, 
+    ai_chat, 
+    search_similar_bugs
+)
 from ui import TerminalUI, UI
 
 
@@ -26,115 +32,123 @@ class BugToolUI(UI):
 
 
 # ==================== 常量配置 ====================
-class BugRecordConfig:
-    """BUG 记录工具配置类"""
-    LLM_TIMEOUT = 100  # LLM 调用超时时间
-    AUTO_FILL_TEXT = "暂未确定"  # 兜底填充文本
-    MAX_SIMILAR_BUGS = 3  # 最多返回的相似 BUG 数量
-    MAX_BUGS_FOR_SEARCH = 50  # AI 搜索时最多使用的历史 BUG 数量
-    MAX_RETRY_COUNT = 2  # 最大重试次数
-    STREAM_TIMEOUT = 5  # 数据流超时时间
-    
-    # BUG 核心特征关键词（用于识别 BUG 描述）
-    BUG_CORE_KEYWORDS = [
-        'bug', '故障', '失败', '异常', '报错', '触发', '复现', '中断',
-        '芯片', '协议', 'pd', 'ufcs', 'qc', 'otg', 'pmic', '电压', '电流',
-        '时序', '状态机', '死机', '重启', '不工作', '无响应', '跳变', '不稳定',
-        '识别', '协商', '通信', '超时', '丢包', '复位', '溢出', '下溢'
-    ]
-    
-    # 无意义过滤词（关键词匹配时过滤）
-    STOP_WORDS = ['的', '了', '是', '我', '有', '一个', '问题', '遇到', '这个', '什么', '在', '和', '就', '都']
-    
-    # 兜底表述关键词
-    FALLBACK_KEYWORDS = [
-        "其他都暂未确定", "其余都待定", "其他都不确定", "剩下的都不知道",
-        "其他暂无", "其余都未确定", "其他都没定", "剩下的暂未确定"
-    ]
+# LLM 相关配置
+LLM_TIMEOUT = 100
+AUTO_FILL_TEXT = "暂未确定"
+MAX_SIMILAR_BUGS = 3
+MAX_BUGS_FOR_SEARCH = 50
+MAX_RETRY_COUNT = 2
 
-# 使用配置常量
-CONFIG = BugRecordConfig()
+# BUG 核心特征关键词
+BUG_CORE_KEYWORDS = [
+    'bug', '故障', '失败', '异常', '报错', '触发', '复现', '中断',
+    '芯片', '协议', 'pd', 'ufcs', 'qc', 'otg', 'ts', 'pmic', '电压', '电流',
+    '时序', '状态机', '死机', '重启', '不工作', '无响应', '跳变', '不稳定',
+    '识别', '协商', '通信', '超时', '丢包', '复位', '溢出', '下溢'
+]
+
+# 无意义过滤词
+STOP_WORDS = [
+    '的', '了', '是', '我', '有', '一个', '问题', '遇到', '这个', '什么', '在', '和', '就', '都'
+]
+
+# 兜底表述关键词
+FALLBACK_KEYWORDS = [
+    "其他都暂未确定", "其余都待定", "其他都不确定", "剩下的都不知道",
+    "其他暂无", "其余都未确定", "其他都没定", "剩下的暂未确定"
+]
+
+# 退出和完成指令
+EXIT_COMMANDS = ['exit', 'quit', '取消']
+MULTI_LINE_MARKER = "###"
+
+# BUG 记录必填字段
+REQUIRED_FIELDS = {
+    "description": "问题现象（详细描述发生了什么，对应模板中的核心现象）",
+    "product_line": "所属产品线（如 PMIC、车载充电器、移动电源等）",
+    "chip_model": "芯片型号（如 SCV89601P 等）",
+    "protocol_type": "协议类型（如 PD3.0、PD3.1、UFCS、QC 等）",
+    "severity": "严重级别（仅选 Blocker/Critical/Major/Minor）",
+    "mass_production": "是否量产环境（仅选是/否）",
+    "trigger_condition": "触发条件（在什么情况下发生的，对应模板中的前置条件）",
+    "reproduce_rate": "复现概率（如 100% 必现、偶发、低概率等）",
+    "environment": "运行环境（如温度、电压、测试工具等，对应模板中的硬件环境）",
+    "root_cause_hypothesis": "初步根因假设（你觉得可能是什么原因，对应模板中的表层原因）",
+    "solution_tried": "已尝试的解决方案（你已经做了什么操作，对应模板中的临时修复）"
+}
 
 class BugDialogTool:
-    def __init__(self, ui: UI = None):
-        # 新增：如果没有传入 UI，默认使用终端 UI
-        self.ui = ui if ui else TerminalUI()
+    """BUG 对话框工具类 - 负责用户交互和数据收集"""
+    
+    def __init__(self, ui: Optional[UI] = None):
+        self.ui = ui or TerminalUI()
         self.bugs_dir = "bug_records"
-        # 全局统一字段配置 - 适配 bug_template.md 模板
-        self.required_fields = {
-            "description": "问题现象（详细描述发生了什么，对应模板中的核心现象）",
-            "product_line": "所属产品线（如 PMIC、车载充电器、移动电源等）",
-            "chip_model": "芯片型号（如 SCV89601P 等）",
-            "protocol_type": "协议类型（如 PD3.0、PD3.1、UFCS、QC 等）",
-            "severity": "严重级别（仅选 Blocker/Critical/Major/Minor）",
-            "mass_production": "是否量产环境（仅选是/否）",
-            "trigger_condition": "触发条件（在什么情况下发生的，对应模板中的前置条件）",
-            "reproduce_rate": "复现概率（如 100% 必现、偶发、低概率等）",
-            "environment": "运行环境（如温度、电压、测试工具等，对应模板中的硬件环境）",
-            "root_cause_hypothesis": "初步根因假设（你觉得可能是什么原因，对应模板中的表层原因）",
-            "solution_tried": "已尝试的解决方案（你已经做了什么操作，对应模板中的临时修复）"
-        }
-        # 兜底表述关键词
-        self.fallback_keywords = [
-            "其他都暂未确定", "其余都待定", "其他都不确定", "剩下的都不知道",
-            "其他暂无", "其余都未确定", "其他都没定", "剩下的暂未确定"
-        ]
-        self.bugs_index = {}
+        self.required_fields = REQUIRED_FIELDS.copy()
+        self.fallback_keywords = FALLBACK_KEYWORDS.copy()
+        self.bugs_index: Dict[str, Dict[str, str]] = {}
+        self._index_dirty = False  # 索引脏标记，优化文件写入
         
-        # 创建目录
-        if not os.path.exists(self.bugs_dir):
-            os.makedirs(self.bugs_dir)
-        
-        # 加载索引
+        self._init_directory()
         self._load_bugs_index()
     
-    def _load_bugs_index(self):
+    def _init_directory(self) -> None:
+        """初始化 BUG 记录目录"""
+        if not os.path.exists(self.bugs_dir):
+            os.makedirs(self.bugs_dir)
+    
+    def _get_index_path(self) -> str:
+        """获取索引文件路径"""
+        return os.path.join(self.bugs_dir, "bugs_index.json")
+    
+    def _load_bugs_index(self) -> None:
         """加载 BUG 记录索引"""
-        index_file = os.path.join(self.bugs_dir, "bugs_index.json")
-        if os.path.exists(index_file):
+        if os.path.exists(self._get_index_path()):
             try:
-                with open(index_file, 'r', encoding='utf-8') as f:
+                with open(self._get_index_path(), 'r', encoding='utf-8') as f:
                     self.bugs_index = json.load(f)
+                    self._index_dirty = False
             except Exception as e:
                 self.ui.log(f"[提示] 索引加载异常：{e}，已重置索引")
                 self.bugs_index = {}
+                self._index_dirty = True
         else:
             self.bugs_index = {}
+            self._index_dirty = True
     
-    def _save_bugs_index(self):
-        """保存 BUG 记录索引"""
-        index_file = os.path.join(self.bugs_dir, "bugs_index.json")
-        with open(index_file, 'w', encoding='utf-8') as f:
-            json.dump(self.bugs_index, f, ensure_ascii=False, indent=2)
+    def _save_bugs_index(self) -> None:
+        """保存 BUG 记录索引（带脏标记优化）"""
+        if not self._index_dirty:
+            return
+        try:
+            with open(self._get_index_path(), 'w', encoding='utf-8') as f:
+                json.dump(self.bugs_index, f, ensure_ascii=False, indent=2)
+            self._index_dirty = False
+        except Exception as e:
+            self.ui.log(f"[错误] 索引保存失败：{e}")
     
-    def _generate_bug_id(self):
+    def _generate_bug_id(self) -> str:
         """生成唯一 BUG ID"""
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         return f"BUG_{timestamp}"
     
-    # ==================== 核心升级：通用 AI 意图识别函数 ====================
-    def _search_similar_bugs_ai(self, query_description):
+    def _search_similar_bugs_ai(self, query_description: str) -> List[Dict[str, Any]]:
         """AI 语义搜索相似 BUG 记录"""
-        return search_similar_bugs(self.bugs_index, query_description, CONFIG.MAX_SIMILAR_BUGS, CONFIG.MAX_BUGS_FOR_SEARCH, CONFIG.MAX_RETRY_COUNT)
+        return search_similar_bugs(
+            self.bugs_index, 
+            query_description, 
+            MAX_SIMILAR_BUGS, 
+            MAX_BUGS_FOR_SEARCH, 
+            MAX_RETRY_COUNT
+        )
     
-    def _extract_keywords(self, text):
+    def _extract_keywords(self, text: str) -> List[str]:
         """提取有效关键词，用于兜底匹配"""
         if not text:
             return []
-        
         text = re.sub(r'[^\w\s]', ' ', text).lower()
         words = text.split()
-        keywords = []
-        for word in words:
-            word = word.strip()
-            if len(word) < 2 or word in CONFIG.STOP_WORDS:
-                continue
-            keywords.append(word)
-        
-        for kw in CONFIG.BUG_CORE_KEYWORDS:
-            if kw in text:
-                keywords.append(kw)
-        
+        keywords = [word for word in words if len(word) >= 2 and word not in STOP_WORDS]
+        keywords.extend([kw for kw in BUG_CORE_KEYWORDS if kw in text])
         return list(set(keywords))
     
     def _search_similar_bugs_keyword(self, query_description):
@@ -178,15 +192,11 @@ class BugDialogTool:
                     "similarity_percentage": similarity_percentage
                 })
         
-        return sorted(similar_bugs, key=lambda x: x.get('match_count', 0), reverse=True)[:CONFIG.MAX_SIMILAR_BUGS]
+        return sorted(similar_bugs, key=lambda x: x.get('match_count', 0), reverse=True)[:MAX_SIMILAR_BUGS]
     
-    def _extract_tags(self, text):
+    def _extract_tags(self, text: str) -> List[str]:
         """提取标签用于搜索优化"""
-        tags = []
-        for tag in CONFIG.BUG_CORE_KEYWORDS:
-            if tag in text.lower():
-                tags.append(tag)
-        return tags
+        return [tag for tag in BUG_CORE_KEYWORDS if tag in text.lower()]
     
     def _init_collect_data(self, initial_desc):
         """初始化收集数据字典"""
@@ -217,13 +227,9 @@ class BugDialogTool:
                 return True
         return False
     
-    def _auto_fill_fallback_fields(self, collect_data):
+    def _auto_fill_fallback_fields(self, collect_data: Dict[str, str]) -> Dict[str, str]:
         """自动填充剩余字段为暂未确定"""
-        updated_data = collect_data.copy()
-        for field, value in updated_data.items():
-            if value == "待补充":
-                updated_data[field] = CONFIG.AUTO_FILL_TEXT
-        return updated_data
+        return {k: (v if v != "待补充" else AUTO_FILL_TEXT) for k, v in collect_data.items()}
     
     def _smart_input(self, prompt="你："):
         """智能输入，单行/多行都支持"""
@@ -259,21 +265,21 @@ class BugDialogTool:
         """AI 自动全字段提取，用户输入任何内容都自动匹配所有字段"""
         return ai_extract_all_fields(user_input, collect_data, self.required_fields)
     
-    def _print_collect_status(self, collect_data):
+    def _print_collect_status(self, collect_data: Dict[str, str]) -> None:
         """打印当前收集状态"""
         self.ui.log("\n📊 当前 BUG 信息收集状态：")
-        self.ui.log("-"*50)
+        self.ui.log("-" * 50)
         for field, field_desc in self.required_fields.items():
             field_name = field_desc.split("（")[0]
             value = collect_data[field]
             if value == "待补充":
                 status = "❌ 待补充"
-            elif value == CONFIG.AUTO_FILL_TEXT:
+            elif value == AUTO_FILL_TEXT:
                 status = "ℹ️  暂未确定"
             else:
                 status = "✅ 已填充"
             self.ui.log(f"{status} {field_name}: {value}")
-        self.ui.log("-"*50)
+        self.ui.log("-" * 50)
     
     def _generate_question(self, missing_field, missing_field_name, collect_data):
         """生成自然提问"""
@@ -643,15 +649,12 @@ Root Cause 类型（勾选）：
         self.ui.log("所有输入环节都支持口语化内容，AI 会自动识别你的意图")
         self.ui.log("="*60)
     
-    def _is_valid_bug_input(self, user_input):
+    def _is_valid_bug_input(self, user_input: str) -> bool:
         """判断用户输入是否为有效 BUG 描述"""
         if not user_input or len(user_input) < 3:
             return False
         input_lower = user_input.lower()
-        for kw in CONFIG.BUG_CORE_KEYWORDS:
-            if kw in input_lower:
-                return True
-        return False
+        return any(kw in input_lower for kw in BUG_CORE_KEYWORDS)
     
     def chat_with_ai(self, user_input):
         """非标准命令由 AI 直接回复"""
