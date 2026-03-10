@@ -232,34 +232,25 @@ class BugDialogTool:
         return {k: (v if v != "待补充" else AUTO_FILL_TEXT) for k, v in collect_data.items()}
     
     def _smart_input(self, prompt="你："):
-        """智能输入，单行/多行都支持"""
+        """智能输入，简化版本"""
         self.ui.log(prompt, end="")
         try:
-            first_line = self.ui.read().strip()
+            user_input = self.ui.read().strip()
             
             # 全局退出指令优先
-            if first_line.lower() in ['exit', 'quit', '取消']:
+            if user_input.lower() in ['exit', 'quit', '取消']:
                 return "exit"
-            if first_line == "完成":
+            if user_input == "完成":
                 return "完成"
-            # 多行模式入口
-            if first_line.lower() == "multi":
-                self.ui.log("📝 已进入多行输入模式，输入完成后单独一行输入###提交")
-                lines = []
-                while True:
-                    line = self.ui.read()
-                    if line.strip() == "###":
-                        break
-                    lines.append(line)
-                return "\n".join(lines).strip()
             
-            return first_line
+            return user_input
         
         except KeyboardInterrupt:
             return "exit"
         except Exception as e:
             self.ui.log(f"[错误] 输入异常：{str(e)}")
             return ""
+
     
     def _ai_extract_all_fields(self, user_input, collect_data):
         """AI 自动全字段提取，用户输入任何内容都自动匹配所有字段"""
@@ -323,12 +314,12 @@ class BugDialogTool:
             for bug in similar_bugs:
                 similar_info += f"- {bug['id']} ({bug.get('date', '')}): {bug['title']}\n"
                 similar_info += f"  相似原因：{bug['similarity_reason']}\n"
-            self.ui.log(similar_info)
+            self.ui.write(similar_info)
         else:
-            self.ui.log("✅ 未发现历史相似 BUG")
+            self.ui.write("✅ 未发现历史相似 BUG")
         
         # 核心收集循环 - 改为一次性显示所有待补充字段，并支持字段标签
-        self.ui.log("\n🤖 信息收集进行中，请补充以下字段信息：")
+        self.ui.write("\n🤖 信息收集进行中，请补充以下字段信息：")
         
         # 获取所有待补充字段列表
         missing_fields = []
@@ -338,29 +329,16 @@ class BugDialogTool:
                 missing_fields.append((field, field_name))
         
         if missing_fields:
-            self.ui.log("\n📋 请补充以下字段信息（可以一次性填写多个，用换行分隔）：")
+            self.ui.write("\n📋 请补充以下字段信息（可以一次性填写多个，用换行分隔）：")
             for i, (field, field_name) in enumerate(missing_fields, 1):
-                self.ui.log(f"{i}. 【{field_name}】: ")
+                self.ui.write(f"{i}. 【{field_name}】: ")
             
-            self.ui.log("\n💡 提示：请按顺序填写上述字段，每个字段一行，完成后输入###提交")
-            self.ui.log("   或者输入 exit 退出，输入完成跳过（但所有字段必须填写）")
-            self.ui.log("   支持格式：字段编号：内容 或 直接填写内容")
+            self.ui.write("\n💡 提示：请按顺序填写上述字段，每个字段一行，完成后输入###提交")
+            self.ui.write("   或者输入 exit 退出，输入完成跳过（但所有字段必须填写）")
+            self.ui.write("   支持格式：字段编号：内容 或 直接填写内容")
             
             # 获取多行输入
-            user_input_lines = []
-            while True:
-                line = self._smart_input(prompt="> ")
-                
-                if line == "exit":
-                    self.ui.log("❌ 已退出 BUG 记录")
-                    return
-                if line == "完成":
-                    self.ui.log("⚠️ 所有必填字段必须填写，不能跳过")
-                    continue
-                if line == "###":
-                    break
-                if line:
-                    user_input_lines.append(line)
+            user_input_lines = self._smart_input(prompt="> ")
             
             # 处理多行输入 - 支持字段编号格式
             if user_input_lines:
@@ -626,28 +604,28 @@ Root Cause 类型（勾选）：
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        self.ui.log(f"\n📄 BUG {bug_id} 详细记录：")
-        self.ui.log("="*60)
-        self.ui.log(content)
-        self.ui.log("="*60)
+        self.ui.write(f"\n📄 BUG {bug_id} 详细记录：")
+        self.ui.write("="*60)
+        self.ui.write(content)
+        self.ui.write("="*60)
     
     def print_help(self):
         """打印帮助说明"""
-        self.ui.log("\n" + "="*60)
-        self.ui.log("📖 BUG 记录工具帮助说明")
-        self.ui.log("="*60)
-        self.ui.log("【核心指令】")
-        self.ui.log("1       进入 BUG 记录模式，手动记录新 BUG")
-        self.ui.log("2       列出所有已保存的 BUG 记录")
-        self.ui.log("3       AI 语义搜索相似 BUG 记录")
-        self.ui.log("4       查看指定 BUG ID 的详细记录")
-        self.ui.log("help    查看本帮助说明")
-        self.ui.log("exit    退出工具")
-        self.ui.log("\n【快速使用】")
-        self.ui.log("直接输入 BUG 描述，工具会先匹配历史记录，再询问是否新建")
-        self.ui.log("\n【AI 智能匹配】")
-        self.ui.log("所有输入环节都支持口语化内容，AI 会自动识别你的意图")
-        self.ui.log("="*60)
+        self.ui.write("\n" + "="*60)
+        self.ui.write("📖 BUG 记录工具帮助说明")
+        self.ui.write("="*60)
+        self.ui.write("【核心指令】")
+        self.ui.write("1       进入 BUG 记录模式，手动记录新 BUG")
+        self.ui.write("2       列出所有已保存的 BUG 记录")
+        self.ui.write("3       AI 语义搜索相似 BUG 记录")
+        self.ui.write("4       查看指定 BUG ID 的详细记录")
+        self.ui.write("help    查看本帮助说明")
+        self.ui.write("exit    退出工具")
+        self.ui.write("\n【快速使用】")
+        self.ui.write("直接输入 BUG 描述，工具会先匹配历史记录，再询问是否新建")
+        self.ui.write("\n【AI 智能匹配】")
+        self.ui.write("所有输入环节都支持口语化内容，AI 会自动识别你的意图")
+        self.ui.write("="*60)
     
     def _is_valid_bug_input(self, user_input: str) -> bool:
         """判断用户输入是否为有效 BUG 描述"""
@@ -675,14 +653,14 @@ Root Cause 类型（勾选）：
         similar_bugs = self._search_similar_bugs_ai(bug_description)
         
         if similar_bugs:
-            self.ui.log("\n✅ 找到以下历史相似 BUG 记录：")
-            self.ui.log("-"*60)
+            self.ui.write("\n✅ 找到以下历史相似 BUG 记录：")
+            self.ui.write("-"*60)
             for idx, bug in enumerate(similar_bugs, 1):
                 similarity_percentage = bug.get('similarity_percentage', 0)
-                self.ui.log(f"{idx}. 🆔 {bug['id']} | 日期：{bug['date']} | 相似度：{similarity_percentage}%")
-                self.ui.log(f"   标题：{bug['title']}")
-                self.ui.log(f"   相似原因：{bug['similarity_reason']}")
-                self.ui.log("-"*60)
+                self.ui.write(f"{idx}. 🆔 {bug['id']} | 日期：{bug['date']} | 相似度：{similarity_percentage}%")
+                self.ui.write(f"   标题：{bug['title']}")
+                self.ui.write(f"   相似原因：{bug['similarity_reason']}")
+                self.ui.write("-"*60)
             
             # 打印操作选项
             bug_desc = "\n📋 可选操作：\n"
@@ -690,7 +668,7 @@ Root Cause 类型（勾选）：
                 bug_desc += f"{idx}. 查看第{idx}条 BUG 的详细记录\n"
             bug_desc += f"{len(similar_bugs)+1}. 新建 BUG 记录\n"
             bug_desc += f"{len(similar_bugs)+2}. 返回主菜单\n"
-            self.ui.log(bug_desc)
+            self.ui.write(bug_desc)
             
             while True:
                 user_input = self.ui.read("\n请输入你的选择：").strip()
@@ -747,7 +725,7 @@ Root Cause 类型（勾选）：
                     self.ui.log(f"❌ AI 意图识别失败：{str(e)}")
                     self.ui.log("💡 请尝试输入数字选择或更明确的文本")
         else:
-            self.ui.log("\n✅ 未找到相似的历史 BUG 记录")
+            self.ui.write("\n✅ 未找到相似的历史 BUG 记录")
             while True:
                 user_input = self.ui.read("是否需要新建 BUG 记录？(新建/返回): ").strip()
                 if user_input.lower() in ['exit', 'quit']:
