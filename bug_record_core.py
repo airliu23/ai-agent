@@ -604,10 +604,10 @@ Root Cause 类型（勾选）：
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        self.ui.write(f"\n📄 BUG {bug_id} 详细记录：")
-        self.ui.write("="*60)
+        
+        # output = f"📄 BUG {bug_id} 详细记录："
+        # output += content
         self.ui.write(content)
-        self.ui.write("="*60)
     
     def print_help(self):
         """打印帮助说明"""
@@ -640,7 +640,7 @@ Root Cause 类型（勾选）：
         
         try:
             response = ai_chat(user_input)
-            self.ui.write(f"\nAI: {response}")
+            self.ui.write(f"{response}")
         except Exception as e:
             self.ui.log(f"\n❌ AI 回复失败：{str(e)}")
             self.ui.log("💡 你可以输入 help 查看帮助，或输入 BUG 描述开始记录")
@@ -651,27 +651,26 @@ Root Cause 类型（勾选）：
         
         # AI 语义匹配历史记录
         similar_bugs = self._search_similar_bugs_ai(bug_description)
-        
         if similar_bugs:
-            self.ui.write("\n✅ 找到以下历史相似 BUG 记录：")
-            self.ui.write("-"*60)
+            output = "✅ 找到以下历史相似 BUG 记录：\n"
+            output += "-"*60 + "\n"
             for idx, bug in enumerate(similar_bugs, 1):
                 similarity_percentage = bug.get('similarity_percentage', 0)
-                self.ui.write(f"{idx}. 🆔 {bug['id']} | 日期：{bug['date']} | 相似度：{similarity_percentage}%")
-                self.ui.write(f"   标题：{bug['title']}")
-                self.ui.write(f"   相似原因：{bug['similarity_reason']}")
-                self.ui.write("-"*60)
+                output += f"{idx}. 🆔 {bug['id']} | 日期：{bug['date']} | 相似度：{similarity_percentage}%\n"
+                output += f"   标题：{bug['title']}\n"
+                output += f"   相似原因：{bug['similarity_reason']}\n"
+                output += "-"*60 + "\n"
             
             # 打印操作选项
-            bug_desc = "\n📋 可选操作：\n"
+            bug_desc = "📋 可选操作：\n"
             for idx, bug in enumerate(similar_bugs, 1):
                 bug_desc += f"{idx}. 查看第{idx}条 BUG 的详细记录\n"
             bug_desc += f"{len(similar_bugs)+1}. 新建 BUG 记录\n"
-            bug_desc += f"{len(similar_bugs)+2}. 返回主菜单\n"
-            self.ui.write(bug_desc)
+            bug_desc += f"{len(similar_bugs)+2}. 返回主菜单"
+            self.ui.write(output + bug_desc)
             
             while True:
-                user_input = self.ui.read("\n请输入你的选择：").strip()
+                user_input = self.ui.read().strip()
                 if user_input.lower() in ['exit', 'quit']:
                     self.ui.log("👋 已退出")
                     return None
