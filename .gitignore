@@ -55,3 +55,4 @@ analysis_*.txt
 *.bak
 .DS_Store
 Thumbs.db
+__pycache__/llm.cpython-312.pyc

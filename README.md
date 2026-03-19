@@ -342,7 +342,14 @@ python main.py
 在 `.env` 文件中配置：
 
 ```bash
-export LLM_API_KEY=your_api_key_here
+# API 密钥（必填）
+export LLM_API_KEY="your_api_key_here"
+
+# API 地址（可选，不设置则使用默认值）
+export LLM_API_URL="user_url"
+
+# 模型名称（可选）
+# export LLM_MODEL="qwen3.5-plus"
 ```
 
 ### LLM 配置 (`llm.py`)
@@ -353,7 +360,11 @@ class LLMConfig:
     MAX_RETRY_COUNT = 2         # 最大重试次数
     REQUEST_TIMEOUT = 60        # 请求超时（秒）
     DEFAULT_MODEL = "qwen3.5-plus"
-    DEFAULT_API_URL = "https://agent.southchips.net/api/ai/open/v1/chat/completions"
+    
+    @classmethod
+    def get_default_api_url(cls):
+        """从环境变量 LLM_API_URL 读取，未设置时使用默认值"""
+        return os.environ.get("LLM_API_URL", "user_url")
 ```
 
 ---

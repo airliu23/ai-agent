@@ -27,7 +27,11 @@ class LLMConfig:
     MAX_RETRY_COUNT = 2  # 最大重试次数
     REQUEST_TIMEOUT = 60  # 请求超时时间（秒）
     DEFAULT_MODEL = "qwen3.5-plus"
-    DEFAULT_API_URL = "https://agent.southchips.net/api/ai/open/v1/chat/completions"
+    
+    @classmethod
+    def get_default_api_url(cls):
+        """从环境变量获取默认 API URL，如果没有设置则使用备用地址"""
+        return os.environ.get("LLM_API_URL", "xxx")
 
 
 def _load_env_from_file(env_file=".env"):
@@ -80,7 +84,7 @@ class LLMClass:
             api_url: API 地址，默认使用配置文件中的地址
             model: 模型名称，默认使用 qwen3.5-plus
         """
-        self.api_url = api_url or LLMConfig.DEFAULT_API_URL
+        self.api_url = api_url or LLMConfig.get_default_api_url()
         self.model_path = model or LLMConfig.DEFAULT_MODEL
         
         # 从参数或环境变量获取 API Key（支持 .env 文件）
