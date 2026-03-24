@@ -13,7 +13,8 @@ import json
 import time
 import re
 import threading
-from typing import Optional, Dict, List, Union
+from typing import Optional, Dict, List, Union, Any
+from datetime import datetime
 
 
 class TimeoutException(Exception):
@@ -26,7 +27,7 @@ class LLMConfig:
     LLM_TIMEOUT = 100  # LLM 调用超时时间（秒）
     MAX_RETRY_COUNT = 2  # 最大重试次数
     REQUEST_TIMEOUT = 60  # 请求超时时间（秒）
-    DEFAULT_MODEL = "qwen3.5-plus"
+    DEFAULT_MODEL = "gpt-5.4"
     
     @classmethod
     def get_default_api_url(cls):
@@ -99,43 +100,40 @@ class LLMClass:
         }
         self.timeout = LLMConfig.REQUEST_TIMEOUT
 
-    def ask_llm(self, prompt: str, system_prompt: str = "You are a helpful assistant.") -> Union[str, Dict]:
+    def chat(self, messages: List[Dict[str, str]]) -> Union[str, Dict]:
         """
-        向 LLM 发送请求并获取回复
+        使用完整消息列表进行多轮对话
         
         Args:
-            prompt: 用户提示内容
-            system_prompt: 系统提示词
+            messages: OpenAI 兼容格式的消息列表，
+                     例如 [{"role": "system", "content": "..."}, {"role": "user", "content": "..."}]
             
         Returns:
             成功时返回回复内容字符串，失败时返回包含 error 字段的字典
         """
         data = {
             "model": self.model_path,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
+            "messages": messages,
             "stream": False
         }
 
         try:
             response = requests.post(
-                self.api_url, 
-                headers=self.headers, 
-                json=data, 
+                self.api_url,
+                headers=self.headers,
+                json=data,
                 timeout=self.timeout
             )
             response.raise_for_status()
-            
+
             result = response.json()
-            
+
             if "choices" in result and len(result["choices"]) > 0:
                 content = result["choices"][0].get("message", {}).get("content", "")
                 return content
             else:
                 return {"error": "API 响应格式异常，未找到有效回复内容"}
-                
+
         except requests.exceptions.Timeout:
             return {"error": f"请求超时（{self.timeout}秒）"}
         except requests.exceptions.RequestException as e:
@@ -144,6 +142,22 @@ class LLMClass:
             return {"error": f"解析响应错误：{str(e)}"}
         except Exception as e:
             return {"error": f"未知错误：{str(e)}"}
+
+    def ask_llm(self, prompt: str, system_prompt: str = "You are a helpful assistant.") -> Union[str, Dict]:
+        """
+        向 LLM 发送单轮请求并获取回复
+        
+        Args:
+            prompt: 用户提示内容
+            system_prompt: 系统提示词
+            
+        Returns:
+            成功时返回回复内容字符串，失败时返回包含 error 字段的字典
+        """
+        return self.chat([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ])
 
     def _extract_json_from_text(self, text: str) -> Optional[Union[List, Dict]]:
         """
@@ -247,6 +261,157 @@ class LLMClass:
         
         print(f"[错误] AI 调用多次失败", flush=True)
         return None
+
+class ChatSession:
+    """多轮对话会话类，负责维护完整对话上下文"""
+
+    def __init__(
+        self,
+        llm_client: Optional[LLMClass] = None,
+        system_prompt: str = "You are a helpful assistant.",
+        max_history_rounds: int = 10,
+        session_id: str = "default"
+    ):
+        """
+        初始化对话会话
+
+        Args:
+            llm_client: LLM 客户端实例
+            system_prompt: 系统提示词
+            max_history_rounds: 最大保留历史轮数（不含 system）
+            session_id: 会话ID，用于持久化存储
+        """
+        self.llm_client = llm_client or LLMClass()
+        self.system_prompt = system_prompt
+        self.max_history_rounds = max_history_rounds
+        self.session_id = session_id
+        self.messages: List[Dict[str, str]] = []
+        self.storage_dir = os.path.join(os.path.dirname(__file__), "chat_sessions")
+        self.storage_file = os.path.join(self.storage_dir, f"{session_id}.json")
+        self._load_session()
+
+    def _load_session(self):
+        """从文件加载会话历史"""
+        if os.path.exists(self.storage_file):
+            try:
+                with open(self.storage_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.messages = data.get("messages", [])
+                    # 检查是否需要重置（超过24小时）
+                    last_time = data.get("last_update", "")
+                    if last_time:
+                        try:
+                            last_dt = datetime.fromisoformat(last_time)
+                            if (datetime.now() - last_dt).days >= 1:
+                                print(f"[会话] 历史会话超过24小时，已重置")
+                                self.reset()
+                                return
+                        except:
+                            pass
+                    print(f"[会话] 已加载历史对话，共 {len(self.messages)} 条消息")
+            except Exception as e:
+                print(f"[会话] 加载历史失败: {e}")
+                self.reset()
+        else:
+            self.reset()
+
+    def _save_session(self):
+        """保存会话历史到文件"""
+        try:
+            os.makedirs(self.storage_dir, exist_ok=True)
+            data = {
+                "session_id": self.session_id,
+                "messages": self.messages,
+                "last_update": datetime.now().isoformat()
+            }
+            with open(self.storage_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[会话] 保存失败: {e}")
+
+    def reset(self):
+        """重置会话，仅保留 system prompt"""
+        self.messages = [{"role": "system", "content": self.system_prompt}]
+        self._save_session()
+
+    def get_messages(self) -> List[Dict[str, str]]:
+        """获取当前会话消息副本"""
+        return [message.copy() for message in self.messages]
+
+    def get_chat_history(self) -> List[Dict[str, str]]:
+        """获取对话历史（不含system消息）"""
+        return [msg for msg in self.messages if msg["role"] != "system"]
+
+    def set_system_prompt(self, system_prompt: str):
+        """更新系统提示词并重置上下文"""
+        self.system_prompt = system_prompt
+        self.reset()
+
+    def _trim_history(self):
+        """裁剪历史上下文，避免消息无限增长"""
+        system_message = self.messages[0] if self.messages else {
+            "role": "system",
+            "content": self.system_prompt
+        }
+        conversation_messages = self.messages[1:]
+        max_message_count = max(self.max_history_rounds * 2, 0)
+
+        if len(conversation_messages) > max_message_count:
+            conversation_messages = conversation_messages[-max_message_count:]
+
+        self.messages = [system_message] + conversation_messages
+
+    def send(self, user_input: str) -> str:
+        """
+        发送一条用户消息并获取 assistant 回复，同时写入上下文
+
+        Args:
+            user_input: 用户输入
+
+        Returns:
+            assistant 回复文本
+
+        Raises:
+            ValueError: 输入为空或模型返回异常
+        """
+        user_input = str(user_input).strip()
+        if not user_input:
+            raise ValueError("用户输入不能为空")
+
+        self.messages.append({"role": "user", "content": user_input})
+        self._trim_history()
+
+        response = self.llm_client.chat(self.messages)
+
+        if isinstance(response, dict):
+            self.messages.pop()
+            raise ValueError(response.get("error", "AI 服务调用失败"))
+
+        assistant_reply = str(response).strip()
+        if not assistant_reply:
+            self.messages.pop()
+            raise ValueError("AI 返回空内容")
+
+        self.messages.append({"role": "assistant", "content": assistant_reply})
+        self._trim_history()
+        self._save_session()  # 保存会话
+        return assistant_reply
+
+
+def create_chat_session(
+    system_prompt: str = "You are a helpful assistant.",
+    llm_client: Optional[LLMClass] = None,
+    max_history_rounds: int = 10,
+    session_id: str = "default"
+) -> ChatSession:
+    """创建一个多轮对话会话"""
+    return ChatSession(
+        llm_client=llm_client,
+        system_prompt=system_prompt,
+        max_history_rounds=max_history_rounds,
+        session_id=session_id
+    )
+
 
 llm_instance = LLMClass()
 
@@ -459,5 +624,30 @@ def ai_intent_recognize(user_input, options, scene_desc):
 
 
 if __name__ == "__main__":
-    llm = LLMClass()
-    print(llm.ask_llm("介绍你自己，说明版本信息"))
+    session = create_chat_session(system_prompt="你是一个友好、简洁的中文助手。")
+    print("多轮对话测试已启动，输入 exit 退出，输入 clear 清空上下文。")
+
+    while True:
+        try:
+            user_text = input("\n你：").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n已退出对话。")
+            break
+
+        if not user_text:
+            continue
+
+        if user_text.lower() in {"exit", "quit"}:
+            print("已退出对话。")
+            break
+
+        if user_text.lower() == "clear":
+            session.reset()
+            print("上下文已清空。")
+            continue
+
+        try:
+            reply = session.send(user_text)
+            print(f"AI：{reply}")
+        except Exception as e:
+            print(f"AI：对话失败：{e}")
