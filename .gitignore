@@ -56,3 +56,7 @@ analysis_*.txt
 .DS_Store
 Thumbs.db
 __pycache__/llm.cpython-312.pyc
+
+# Node.js
+node_modules/
+package-lock.json

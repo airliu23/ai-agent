@@ -304,16 +304,20 @@ class ChatSession:
                             last_dt = datetime.fromisoformat(last_time)
                             if (datetime.now() - last_dt).days >= 1:
                                 print(f"[会话] 历史会话超过24小时，已重置")
-                                self.reset()
+                                self._reset_memory()
                                 return
                         except:
                             pass
                     print(f"[会话] 已加载历史对话，共 {len(self.messages)} 条消息")
             except Exception as e:
                 print(f"[会话] 加载历史失败: {e}")
-                self.reset()
+                self._reset_memory()
         else:
-            self.reset()
+            self._reset_memory()
+
+    def _reset_memory(self):
+        """仅重置内存中的消息，不写入磁盘"""
+        self.messages = [{"role": "system", "content": self.system_prompt}]
 
     def _save_session(self):
         """保存会话历史到文件"""
@@ -331,7 +335,7 @@ class ChatSession:
 
     def reset(self):
         """重置会话，仅保留 system prompt"""
-        self.messages = [{"role": "system", "content": self.system_prompt}]
+        self._reset_memory()
         self._save_session()
 
     def get_messages(self) -> List[Dict[str, str]]:
