@@ -21,6 +21,7 @@
                 :status="status"
                 :statusText="statusText"
                 @send="handleSend"
+                @selectFile="openFileBrowser"
                 @sendFile="handleSendFile"
             />
         </div>
@@ -42,6 +43,13 @@
             @confirm="dialog.onConfirm"
             @cancel="dialog.visible = false"
         />
+        
+        <!-- 文件浏览器 -->
+        <FileBrowser
+            :visible="fileBrowserVisible"
+            @select="onFileSelected"
+            @cancel="fileBrowserVisible = false"
+        />
     </div>
 </template>
 
@@ -49,11 +57,12 @@
 import Sidebar from './components/Sidebar.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
+import FileBrowser from './components/FileBrowser.vue'
 import { useTheme } from './composables/useTheme.js'
 
 export default {
     name: 'App',
-    components: { Sidebar, ChatPanel, ConfirmDialog },
+    components: { Sidebar, ChatPanel, ConfirmDialog, FileBrowser },
     setup() {
         // 初始化主题（确保 DOM 属性被设置）
         useTheme()
@@ -65,6 +74,7 @@ export default {
             statusText: '就绪',
             sessions: [],
             currentSessionId: '',
+            fileBrowserVisible: false,
             dialog: {
                 visible: false,
                 title: '',
@@ -206,28 +216,41 @@ export default {
                 this.setStatus('error', '对话失败')
             }
         },
-        async handleSendFile(question) {
+        openFileBrowser() {
+            this.fileBrowserVisible = true
+        },
+        onFileSelected(fileInfo) {
+            this.fileBrowserVisible = false
+            this.$refs.chatPanel.setPendingFile({
+                path: fileInfo.path,
+                name: fileInfo.name,
+                size: fileInfo.size,
+                isImage: fileInfo.isImage
+            })
+        },
+        async handleSendFile({ path, question }) {
             if (!(window.pywebview && window.pywebview.api)) {
                 this.$refs.chatPanel.addMessage('system', '当前未连接到 API。')
                 return
             }
 
             try {
-                this.setStatus('busy', '正在打开文件选择框...')
-                const result = await window.pywebview.api.receive_chat_file(question)
+                this.setStatus('busy', '正在分析文件...')
+                const result = await window.pywebview.api.analyze_file(path, question)
 
                 if (!result || !result.success) {
                     this.setStatus('ready', '就绪')
-                    if (result && result.error && result.error !== '未选择文件') {
-                        this.$refs.chatPanel.addMessage('system', '文件分析失败：' + result.error)
-                    }
+                    this.$refs.chatPanel.addMessage('system', '文件分析失败：' + (result?.error || '未知错误'))
                     return
                 }
 
                 this.$refs.chatPanel.hideWelcome()
-                this.$refs.chatPanel.addMessage('user', `📎 ${result.file_name}${question ? ' - ' + question : ''}`)
+                const isImage = /\.(png|jpg|jpeg|gif|bmp|webp|svg)$/i.test(result.file_name)
+                const icon = isImage ? '🖼️' : '📎'
+                this.$refs.chatPanel.addMessage('user', `${icon} ${result.file_name}${question ? ' - ' + question : ''}`)
                 this.$refs.chatPanel.addMessage('ai', result.reply)
                 this.setStatus('ready', '文件分析完成')
+                await this.loadSessions()
             } catch (error) {
                 this.$refs.chatPanel.addMessage('system', '文件分析失败：' + error)
                 this.setStatus('error', '文件分析失败')

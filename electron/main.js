@@ -93,6 +93,7 @@ function stopPythonBackend() {
 
 // 处理文件选择对话框
 ipcMain.handle('dialog:openFile', async () => {
+    // 使用 mainWindow 作为父窗口，对话框关闭后焦点自然返回
     const result = await dialog.showOpenDialog(mainWindow, {
         properties: ['openFile'],
         filters: [

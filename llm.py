@@ -401,6 +401,44 @@ class ChatSession:
         self._save_session()  # 保存会话
         return assistant_reply
 
+    def send_multimodal(self, content) -> str:
+        """
+        发送多模态消息（如图片+文本）并获取回复
+
+        Args:
+            content: OpenAI vision 格式的 content 列表，
+                     例如 [{"type": "text", "text": "..."}, {"type": "image_url", "image_url": {"url": "data:..."}}]
+
+        Returns:
+            assistant 回复文本
+        """
+        if not content:
+            raise ValueError("消息内容不能为空")
+
+        self.messages.append({"role": "user", "content": content})
+        self._trim_history()
+
+        response = self.llm_client.chat(self.messages)
+
+        if isinstance(response, dict):
+            self.messages.pop()
+            raise ValueError(response.get("error", "AI 服务调用失败"))
+
+        assistant_reply = str(response).strip()
+        if not assistant_reply:
+            self.messages.pop()
+            raise ValueError("AI 返回空内容")
+
+        # 保存时将多模态消息简化为文本（避免 base64 占用存储）
+        text_parts = [item.get("text", "") for item in content if item.get("type") == "text"]
+        saved_text = " ".join(text_parts) + " [📷 图片]"
+        self.messages[-1] = {"role": "user", "content": saved_text}
+
+        self.messages.append({"role": "assistant", "content": assistant_reply})
+        self._trim_history()
+        self._save_session()
+        return assistant_reply
+
 
 def create_chat_session(
     system_prompt: str = "You are a helpful assistant.",

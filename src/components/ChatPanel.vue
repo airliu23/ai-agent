@@ -34,17 +34,28 @@
         <!-- 输入区域 -->
         <div class="input-area">
             <div class="input-wrapper">
+                <!-- 文件预览 -->
+                <div class="pending-file" v-if="pendingFile">
+                    <div class="pending-file-info">
+                        <span class="pending-file-icon">{{ pendingFile.isImage ? '🖼️' : '📄' }}</span>
+                        <div class="pending-file-detail">
+                            <span class="pending-file-name">{{ pendingFile.name }}</span>
+                            <span class="pending-file-size">{{ pendingFile.size }}</span>
+                        </div>
+                    </div>
+                    <button class="pending-file-remove" @click="removePendingFile" title="移除文件">✕</button>
+                </div>
                 <textarea 
                     class="input-textarea" 
                     ref="inputText"
                     v-model="inputValue"
-                    :placeholder="placeholder"
+                    :placeholder="pendingFile ? '输入对该文件的问题，然后发送...' : placeholder"
                     @input="autoResize"
                     @keydown="handleKeydown"
                 ></textarea>
                 <div class="input-toolbar">
                     <div class="toolbar-left">
-                        <button class="toolbar-btn" @click="handleSendFile" title="上传文件">
+                        <button class="toolbar-btn" @click="selectFile" title="上传文件">
                             📎 上传文件
                         </button>
                         <button class="toolbar-btn" @click="showShortcuts" title="快捷指令">
@@ -76,7 +87,8 @@ export default {
         return {
             inputValue: '',
             messages: [],
-            showWelcome: true
+            showWelcome: true,
+            pendingFile: null  // { path, name, size, isImage }
         }
     },
     computed: {
@@ -118,19 +130,31 @@ export default {
         },
         handleSend() {
             const text = this.inputValue.trim()
+            
+            // 有待发送文件时
+            if (this.pendingFile) {
+                this.inputValue = ''
+                this.$refs.inputText.style.height = 'auto'
+                this.$emit('sendFile', { path: this.pendingFile.path, question: text })
+                this.pendingFile = null
+                return
+            }
+            
+            // 普通文本消息
             if (!text) return
-
             this.inputValue = ''
             this.$refs.inputText.style.height = 'auto'
-
             this.addMessage('user', text)
             this.$emit('send', text)
         },
-        handleSendFile() {
-            const question = this.inputValue.trim()
-            this.inputValue = ''
-            this.$refs.inputText.style.height = 'auto'
-            this.$emit('sendFile', question)
+        async selectFile() {
+            this.$emit('selectFile')
+        },
+        setPendingFile(fileInfo) {
+            this.pendingFile = fileInfo
+        },
+        removePendingFile() {
+            this.pendingFile = null
         },
         addMessage(type, content) {
             this.showWelcome = false
@@ -379,5 +403,59 @@ export default {
 @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
+}
+
+/* 待发送文件预览 */
+.pending-file {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--bg-container);
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius-md);
+    padding: 8px 12px;
+    margin-bottom: 8px;
+}
+
+.pending-file-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.pending-file-icon {
+    font-size: 24px;
+}
+
+.pending-file-detail {
+    display: flex;
+    flex-direction: column;
+}
+
+.pending-file-name {
+    font-size: var(--font-sm);
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.pending-file-size {
+    font-size: 11px;
+    color: var(--text-tertiary);
+}
+
+.pending-file-remove {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-tertiary);
+    font-size: 14px;
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    transition: all var(--transition-fast);
+}
+
+.pending-file-remove:hover {
+    color: var(--danger);
+    background: rgba(255, 77, 79, 0.1);
 }
 </style>

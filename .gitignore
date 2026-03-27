@@ -60,3 +60,9 @@ __pycache__/llm.cpython-312.pyc
 # Node.js
 node_modules/
 package-lock.json
+
+# 对话记录
+chat_sessions/
+
+# BUG 记录
+bug_records/

@@ -221,9 +221,139 @@ def delete_session():
         return jsonify({"success": False, "error": str(e)})
 
 
+IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg'}
+
+
+def is_image_file(file_path):
+    """判断是否为图片文件"""
+    ext = os.path.splitext(file_path)[1].lower()
+    return ext in IMAGE_EXTENSIONS
+
+
+def encode_image_base64(file_path):
+    """将图片编码为 base64"""
+    import base64
+    with open(file_path, 'rb') as f:
+        return base64.b64encode(f.read()).decode('utf-8')
+
+
+def get_image_mime(file_path):
+    """获取图片 MIME 类型"""
+    ext = os.path.splitext(file_path)[1].lower()
+    mime_map = {
+        '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif', '.bmp': 'image/bmp', '.webp': 'image/webp',
+        '.svg': 'image/svg+xml'
+    }
+    return mime_map.get(ext, 'image/png')
+
+
+def format_file_size(size_bytes: int) -> str:
+    """格式化文件大小"""
+    if size_bytes < 1024:
+        return f"{size_bytes}B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f}KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.1f}MB"
+
+
+@app.route('/api/dir/list', methods=['POST'])
+def list_directory():
+    """列出目录内容"""
+    data = request.get_json()
+    dir_path = data.get('path', os.path.expanduser('~'))
+    
+    # 处理特殊路径
+    if dir_path == '~':
+        dir_path = os.path.expanduser('~')
+    
+    if not os.path.exists(dir_path):
+        return jsonify({"success": False, "error": "目录不存在"})
+    
+    if not os.path.isdir(dir_path):
+        return jsonify({"success": False, "error": "不是目录"})
+    
+    try:
+        items = []
+        for name in os.listdir(dir_path):
+            full_path = os.path.join(dir_path, name)
+            try:
+                is_dir = os.path.isdir(full_path)
+                stat_info = os.stat(full_path)
+                items.append({
+                    "name": name,
+                    "path": full_path,
+                    "isDir": is_dir,
+                    "isImage": is_image_file(full_path) if not is_dir else False,
+                    "size": format_file_size(stat_info.st_size) if not is_dir else "",
+                    "mtime": stat_info.st_mtime
+                })
+            except (PermissionError, OSError):
+                continue
+        
+        # 排序：目录在前，然后按名称排序
+        items.sort(key=lambda x: (not x['isDir'], x['name'].lower()))
+        
+        return jsonify({
+            "success": True,
+            "path": dir_path,
+            "parent": os.path.dirname(dir_path) if dir_path != '/' else None,
+            "items": items
+        })
+    except PermissionError:
+        return jsonify({"success": False, "error": "没有访问权限"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route('/api/file/thumbnail', methods=['GET'])
+def get_thumbnail():
+    """获取图片缩略图"""
+    file_path = request.args.get('path')
+    
+    if not file_path or not os.path.exists(file_path):
+        return jsonify({"success": False, "error": "文件不存在"}), 404
+    
+    if not is_image_file(file_path):
+        return jsonify({"success": False, "error": "不是图片文件"}), 400
+    
+    try:
+        # 直接返回图片文件
+        from flask import send_file
+        return send_file(file_path, mimetype=get_image_mime(file_path))
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/file/info', methods=['POST'])
+def file_info():
+    """获取文件信息（不分析内容）"""
+    data = request.get_json()
+    file_path = data.get('path')
+    
+    if not file_path or not os.path.exists(file_path):
+        return jsonify({"success": False, "error": "文件不存在"})
+    
+    try:
+        file_name = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
+        is_image = is_image_file(file_path)
+        
+        return jsonify({
+            "success": True,
+            "path": file_path,
+            "name": file_name,
+            "size": format_file_size(file_size),
+            "isImage": is_image
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
 @app.route('/api/file/read', methods=['POST'])
 def read_file():
-    """读取文件内容（支持 PDF）"""
+    """读取文件内容（支持 PDF、图片、文本）"""
     data = request.get_json()
     file_path = data.get('path')
     question = data.get('question', '')
@@ -232,14 +362,28 @@ def read_file():
         return jsonify({"success": False, "error": "文件不存在"})
     
     try:
-        # 判断文件类型
+        file_name = os.path.basename(file_path)
+
+        # 图片文件 - 使用 vision 多模态分析
+        if is_image_file(file_path):
+            image_b64 = encode_image_base64(file_path)
+            mime = get_image_mime(file_path)
+            text = question if question else f"请详细分析这张图片的内容。图片文件名：{file_name}"
+            
+            # 构建 OpenAI vision 格式的多模态消息
+            multimodal_content = [
+                {"type": "text", "text": text},
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}}
+            ]
+            reply = chat_session.send_multimodal(multimodal_content)
+            return jsonify({"success": True, "reply": reply, "file_name": file_name})
+
+        # PDF 文件
         if file_path.lower().endswith('.pdf'):
             content = extract_pdf_content(file_path)
         else:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
-        
-        file_name = os.path.basename(file_path)
         
         # 构建带文件信息的提示
         if question:

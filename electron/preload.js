@@ -69,6 +69,23 @@ const api = {
         return res.json();
     },
 
+    // ===== 文件浏览器 =====
+
+    // 列出目录内容
+    async list_dir(path) {
+        const res = await fetch(`${API_BASE}/api/dir/list`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: path || '~' })
+        });
+        return res.json();
+    },
+
+    // 获取图片缩略图 URL
+    get_thumbnail_url(path) {
+        return `${API_BASE}/api/file/thumbnail?path=${encodeURIComponent(path)}`;
+    },
+
     // BUG 模式 - 发送指令
     async receive_input(text) {
         const res = await fetch(`${API_BASE}/api/bug/input`, {
@@ -94,7 +111,32 @@ const api = {
         return res.json();
     },
 
-    // 选择文件（仅选择，不分析）
+    // 仅选择文件（返回文件信息，不分析）
+    async select_file() {
+        const filePath = await ipcRenderer.invoke('dialog:openFile');
+        if (!filePath) {
+            return { success: false };
+        }
+        // 获取文件元信息
+        const res = await fetch(`${API_BASE}/api/file/info`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: filePath })
+        });
+        return res.json();
+    },
+
+    // 分析已选择的文件
+    async analyze_file(path, question) {
+        const res = await fetch(`${API_BASE}/api/file/read`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, question: question || '' })
+        });
+        return res.json();
+    },
+
+    // 选择文件（仅选择，不分析）- 旧接口保留兼容
     async choose_chat_file() {
         const filePath = await ipcRenderer.invoke('dialog:openFile');
         if (!filePath) {
