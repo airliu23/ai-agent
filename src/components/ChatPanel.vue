@@ -163,11 +163,19 @@ export default {
             this.$nextTick(() => {
                 const area = this.$refs.messagesArea
                 if (type === 'user') {
-                    area.scrollTop = area.scrollHeight
-                } else {
+                    // 用户消息：滚动到该消息顶部显示
                     const lastMsg = area.lastElementChild
                     if (lastMsg) {
                         lastMsg.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                    }
+                } else {
+                    // AI回复：找到对应的用户消息，滚动到用户消息位置
+                    const messages = area.children
+                    for (let i = messages.length - 2; i >= 0; i--) {
+                        if (messages[i].classList.contains('user')) {
+                            messages[i].scrollIntoView({ behavior: 'smooth', block: 'start' })
+                            break
+                        }
                     }
                 }
             })

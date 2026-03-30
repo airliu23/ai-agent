@@ -142,7 +142,9 @@ export default {
                     if (result.history && result.history.length > 0) {
                         this.$refs.chatPanel.hideWelcome()
                         for (const msg of result.history) {
-                            this.$refs.chatPanel.addMessage(msg.role, msg.content)
+                            // 映射 assistant -> ai
+                            const type = msg.role === 'assistant' ? 'ai' : msg.role
+                            this.$refs.chatPanel.addMessage(type, msg.content)
                         }
                     }
                 }

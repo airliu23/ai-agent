@@ -24,10 +24,10 @@ class TimeoutException(Exception):
 
 class LLMConfig:
     """LLM 配置类"""
-    LLM_TIMEOUT = 100  # LLM 调用超时时间（秒）
+    LLM_TIMEOUT = 200  # LLM 调用超时时间（秒）
     MAX_RETRY_COUNT = 2  # 最大重试次数
-    REQUEST_TIMEOUT = 60  # 请求超时时间（秒）
-    DEFAULT_MODEL = "gpt-5.4"
+    REQUEST_TIMEOUT = 120  # 请求超时时间（秒）
+    DEFAULT_MODEL = "pa/gpt-5.4"
     
     @classmethod
     def get_default_api_url(cls):
@@ -297,17 +297,6 @@ class ChatSession:
                 with open(self.storage_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.messages = data.get("messages", [])
-                    # 检查是否需要重置（超过24小时）
-                    last_time = data.get("last_update", "")
-                    if last_time:
-                        try:
-                            last_dt = datetime.fromisoformat(last_time)
-                            if (datetime.now() - last_dt).days >= 1:
-                                print(f"[会话] 历史会话超过24小时，已重置")
-                                self._reset_memory()
-                                return
-                        except:
-                            pass
                     print(f"[会话] 已加载历史对话，共 {len(self.messages)} 条消息")
             except Exception as e:
                 print(f"[会话] 加载历史失败: {e}")
