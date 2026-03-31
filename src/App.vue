@@ -23,6 +23,7 @@
                 @send="handleSend"
                 @selectFile="openFileBrowser"
                 @sendFile="handleSendFile"
+                @pasteImage="handlePasteImage"
             />
         </div>
         <div class="status-bar">
@@ -192,8 +193,14 @@ export default {
             } else {
                 this.setStatus('busy', 'BUG 工具处理中...')
                 try {
-                    await window.pywebview.api.receive_input(text)
-                    this.setStatus('ready', '就绪')
+                    const result = await window.pywebview.api.receive_input(text)
+                    if (result && result.success) {
+                        this.$refs.chatPanel.addMessage('ai', result.reply)
+                        this.setStatus('ready', '处理完成')
+                    } else {
+                        this.$refs.chatPanel.addMessage('system', 'BUG 工具错误：' + ((result && result.error) || '未知错误'))
+                        this.setStatus('error', '处理失败')
+                    }
                 } catch (error) {
                     this.$refs.chatPanel.addMessage('system', '发送失败：' + error)
                     this.setStatus('error', '发送失败')
@@ -237,6 +244,42 @@ export default {
             }
 
             try {
+                // BUG 模式下，支持图片和文本文件
+                if (this.currentMode === 'bug') {
+                    const isImage = /\.(png|jpg|jpeg|gif|bmp|webp|svg)$/i.test(path)
+                    const isTextFile = /\.(txt|log|md|json|xml|csv|c|h|py|js|html|css)$/i.test(path)
+                    
+                    if (isImage) {
+                        this.setStatus('busy', '正在添加图片...')
+                        const result = await window.pywebview.api.add_bug_image(path)
+                        if (result && result.success) {
+                            this.$refs.chatPanel.hideWelcome()
+                            this.$refs.chatPanel.addMessage('user', `🖼️ ${result.file_name}`)
+                            this.$refs.chatPanel.addMessage('ai', result.reply)
+                            this.setStatus('ready', '图片已添加')
+                        } else {
+                            this.$refs.chatPanel.addMessage('system', '添加图片失败：' + (result?.error || '未知错误'))
+                            this.setStatus('error', '添加失败')
+                        }
+                    } else if (isTextFile) {
+                        this.setStatus('busy', '正在添加文件...')
+                        const result = await window.pywebview.api.add_bug_file(path)
+                        if (result && result.success) {
+                            this.$refs.chatPanel.hideWelcome()
+                            this.$refs.chatPanel.addMessage('user', `📄 ${result.file_name}`)
+                            this.$refs.chatPanel.addMessage('ai', result.reply)
+                            this.setStatus('ready', '文件已添加')
+                        } else {
+                            this.$refs.chatPanel.addMessage('system', '添加文件失败：' + (result?.error || '未知错误'))
+                            this.setStatus('error', '添加失败')
+                        }
+                    } else {
+                        this.$refs.chatPanel.addMessage('system', 'BUG 模式支持图片和文本文件')
+                    }
+                    return
+                }
+
+                // Chat 模式 - 原有流程
                 this.setStatus('busy', '正在分析文件...')
                 const result = await window.pywebview.api.analyze_file(path, question)
 
@@ -256,6 +299,52 @@ export default {
             } catch (error) {
                 this.$refs.chatPanel.addMessage('system', '文件分析失败：' + error)
                 this.setStatus('error', '文件分析失败')
+            }
+        },
+        async handlePasteImage(blob) {
+            if (!(window.pywebview && window.pywebview.api)) {
+                this.$refs.chatPanel.addMessage('system', '当前未连接到 API。')
+                return
+            }
+            
+            try {
+                this.setStatus('busy', '正在处理粘贴的图片...')
+                
+                // 将 blob 转换为 base64
+                const reader = new FileReader()
+                const base64Promise = new Promise((resolve, reject) => {
+                    reader.onload = () => resolve(reader.result)
+                    reader.onerror = reject
+                })
+                reader.readAsDataURL(blob)
+                const base64Data = await base64Promise
+                
+                // 生成文件名
+                const ext = blob.type.split('/')[1] || 'png'
+                const filename = `paste_${Date.now()}.${ext}`
+                
+                // 根据当前模式调用不同的 API
+                let result
+                if (this.currentMode === 'bug') {
+                    result = await window.pywebview.api.bug_paste_image(base64Data, filename)
+                } else {
+                    result = await window.pywebview.api.paste_image(base64Data, filename)
+                }
+                
+                if (result && result.success) {
+                    this.$refs.chatPanel.hideWelcome()
+                    this.$refs.chatPanel.addMessage('user', `🖼️ ${result.file_name}`)
+                    if (result.reply) {
+                        this.$refs.chatPanel.addMessage('ai', result.reply)
+                    }
+                    this.setStatus('ready', '图片已添加')
+                } else {
+                    this.$refs.chatPanel.addMessage('system', '粘贴图片失败：' + (result?.error || '未知错误'))
+                    this.setStatus('error', '粘贴失败')
+                }
+            } catch (error) {
+                this.$refs.chatPanel.addMessage('system', '粘贴图片失败：' + error)
+                this.setStatus('error', '粘贴失败')
             }
         },
         showClearContextDialog() {

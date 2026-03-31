@@ -184,7 +184,7 @@ class LLMClass:
             except json.JSONDecodeError:
                 continue
         
-        # 匹配对象
+        # 然后匹配对象（字典）
         for match in re.findall(r'\{[\s\S]*\}', text):
             try:
                 match = re.sub(r',\s*([}\]])', r'\1', match)
@@ -450,14 +450,23 @@ def ai_extract_all_fields(user_input, collect_data, required_fields):
     """AI 自动全字段提取，用户输入任何内容都自动匹配所有字段"""
     filled_fields = [k for k, v in collect_data.items() if v != "待补充"]
     
+    # 构建字段映射表：中文名称 -> 英文key
+    field_mapping = {}
+    for key, desc in required_fields.items():
+        chinese_name = desc.split("（")[0]  # 提取中文名称
+        field_mapping[chinese_name] = key
+    
     prompt = f"""
 你是一个专业的 BUG 信息提取专家，从用户输入中提取 BUG 信息，更新 JSON 数据。
 
 【核心规则】
 1. 已填充字段：{filled_fields}，绝对不要修改、覆盖
 2. 仅处理"待补充"的字段，用户没提到的保持"待补充"
-3. 所有字段都是必填项，不能使用"暂未确定"等兜底表述
+3. 输出 JSON 必须使用英文 key（如 product_line, chip_model 等）
 4. 仅输出更新后的完整 JSON，不要其他任何内容
+
+【字段映射表】中文名称 -> 英文key
+{json.dumps(field_mapping, ensure_ascii=False, indent=2)}
 
 【字段说明】
 {json.dumps(required_fields, ensure_ascii=False, indent=2)}
@@ -492,25 +501,6 @@ def ai_generate_question(missing_field, missing_field_name, collect_data, field_
     question = llm_instance._call_llm_safely(prompt, expected_format="text")
     return question if question else f"请补充一下{missing_field_name}："
 
-def ai_chat(user_input):
-    """AI 闲聊功能"""
-    prompt = f"""
-你是专业的 BUG 记录工具助手，也可以和用户友好闲聊。
-【用户输入】{user_input}
-【要求】回复简洁友好，不超过 300 字，纯文本，不要 Markdown 格式。如果用户问的是 BUG 相关问题，引导使用工具功能。
-"""
-    try:
-        response = llm_instance._llm_call_with_timeout(prompt)
-        # 处理可能返回的错误字典
-        if isinstance(response, dict):
-            return f"AI 服务不可用：{response.get('error', '未知错误')}"
-        response = response.strip()
-        if len(response) > 500:
-            response = response[:500] + "..."
-        return response
-    except Exception as e:
-        return f"AI 回复失败：{str(e)}"
-
 def search_similar_bugs(bugs_index, query_description, max_similar_bugs, max_bugs_for_search, max_retry_count):
     """
     优化版 AI 语义搜索：生成自然的相似原因，不再生硬罗列关键词
@@ -518,7 +508,8 @@ def search_similar_bugs(bugs_index, query_description, max_similar_bugs, max_bug
     if not bugs_index:
         return []
     
-    print("[进度] 正在 AI 语义匹配历史 BUG 记录...", flush=True)
+    print(bugs_index)
+    print(f"[进度] 正在 AI 语义匹配历史 BUG 记录... ", flush=True)
     
     # 准备历史 BUG 简要信息
     all_bugs_summary = []
@@ -546,8 +537,9 @@ def search_similar_bugs(bugs_index, query_description, max_similar_bugs, max_bug
 1. 仅输出 JSON 数组，每个元素包含 id、title、description、date、similarity_reason、similarity_percentage
 2. similarity_reason 要用自然语言描述，比如「都与 OTG 功能失败相关」，不要罗列关键词
 3. similarity_percentage 是 0-100 的整数，表示相似度百分比
-4. 没有相似 BUG 就输出空数组 []，仅输出 JSON，不要其他任何内容
-5. 严格 JSON 格式，不能有语法错误
+4. 相似度低于 70% 的记录不要包含在结果中
+5. 没有相似 BUG 就输出空数组 []，仅输出 JSON，不要其他任何内容
+6. 严格 JSON 格式，不能有语法错误
 
 【输出格式】
 [
@@ -573,7 +565,7 @@ def search_similar_bugs(bugs_index, query_description, max_similar_bugs, max_bug
                 break
         except Exception as e:
             print(f"[警告] 第{retry+1}次匹配失败：{str(e)}", flush=True)
-            if retry < max_retry_count -1:
+            if retry < max_retry_count - 1:
                 print("[进度] 2 秒后重试...", flush=True)
                 time.sleep(2)
     
@@ -583,11 +575,15 @@ def search_similar_bugs(bugs_index, query_description, max_similar_bugs, max_bug
         return []
     
     # 格式化返回结果
+    SIMILARITY_THRESHOLD = 70  # 相似度低于此值视为不相似
     similar_bugs = []
     try:
         for bug in ai_result:
             if isinstance(bug, dict) and "id" in bug and bug["id"] in bugs_index:
-                # 安全地获取所有字段，使用默认值
+                similarity_percentage = bug.get("similarity_percentage", 0)
+                # 过滤掉相似度低于阈值的结果
+                if similarity_percentage < SIMILARITY_THRESHOLD:
+                    continue
                 bug_info = bugs_index[bug["id"]]
                 similar_bugs.append({
                     "id": bug["id"],
@@ -595,13 +591,35 @@ def search_similar_bugs(bugs_index, query_description, max_similar_bugs, max_bug
                     "description": bug.get("description", bug_info.get("description", "")),
                     "date": bug.get("date", bug_info.get("date", "未知日期")),
                     "similarity_reason": bug.get("similarity_reason", "语义相似"),
-                    "similarity_percentage": bug.get("similarity_percentage", 0)
+                    "similarity_percentage": similarity_percentage
                 })
     except Exception as e:
         print(f"[提示] AI 结果解析异常：{e}", flush=True)
         return []
     
     return similar_bugs[:max_similar_bugs]
+
+
+def ai_humanize_reply(raw_message: str, context: str = "") -> str:
+    """
+    将系统状态消息改写为自然、拟人化的 AI 助手回复。
+    raw_message: 原始状态消息（如 "✅ 找到以下历史相似 BUG 记录"）
+    context: 额外上下文信息（可选）
+    返回拟人化后的文本，失败时返回原始消息。
+    """
+    context_part = f"\n【上下文】{context}" if context else ""
+    prompt = f"""你是一个专业、友好的嵌入式BUG记录助手。
+请将以下系统消息改写为自然流畅、拟人化的助手回复，要求：
+1. 保留原始信息中的所有关键内容（如BUG ID、数字、标题等），不要删减
+2. 语气自然亲切，像助手在对话，不要机械复读
+3. 如果原消息包含列表/表格/Markdown格式，保持其结构，只改写说明性文字
+4. 直接输出改写后的内容，不要加任何前缀说明{context_part}
+
+【原始消息】
+{raw_message}
+"""
+    result = llm_instance._call_llm_safely(prompt, expected_format="text")
+    return result if result else raw_message
 
 
 def ai_intent_recognize(user_input, options, scene_desc):
@@ -627,18 +645,18 @@ def ai_intent_recognize(user_input, options, scene_desc):
 【用户输入】
 {user_input}
 
-【重要规则】
-1. 如果是普通的问候语（如你好、hello、hi 等），应该返回"none"，因为这些不是功能指令
-2. 如果用户输入与 BUG 相关（包含 bug、故障、失败、异常等关键词），应该返回"none"，让系统走 BUG 描述处理流程
-3. 支持中英文模糊匹配和同义词识别，**关键词优先匹配**：
-   - 输入包含"新建"、"创建"、"新增"、"添加"、"new"、"create"等词 → 必须匹配"新建"操作
-   - 输入包含"返回"、"回去"、"退出"、"back"、"return"、"主菜单"等词 → 必须匹配"返回"操作
-   - 输入包含"确认"、"yes"、"y"、"ok"、"okay"、"sure"、"好的"、"没问题"等词 → 必须匹配"确认"操作
-   - 输入包含"修改"、"change"、"edit"、"modify"、"改一下"等词 → 必须匹配"修改"操作
-   - 输入包含"取消"、"no"、"n"、"cancel"、"quit"、"不了"、"不要"等词 → 必须匹配"取消"操作
-   - 只有当输入包含"第一"、"第 1"、"第一个"、"第一条"等明确序号时 → 才匹配查看对应序号的操作
-4. 如果完全匹配不到任何操作，仅输出"none"，不要输出其他内容
-"""
+# 【重要规则】
+# 1. 如果是普通的问候语（如你好、hello、hi 等），应该返回"none"，因为这些不是功能指令
+# 2. 如果用户输入与 BUG 相关（包含 bug、故障、失败、异常等关键词），应该返回"none"，让系统走 BUG 描述处理流程
+# 3. 支持中英文模糊匹配和同义词识别，**关键词优先匹配**：
+#    - 输入包含"新建"、"创建"、"新增"、"添加"、"new"、"create"等词 → 必须匹配"新建"操作
+#    - 输入包含"返回"、"回去"、"退出"、"back"、"return"、"主菜单"等词 → 必须匹配"返回"操作
+#    - 输入包含"确认"、"yes"、"y"、"ok"、"okay"、"sure"、"好的"、"没问题"等词 → 必须匹配"确认"操作
+#    - 输入包含"修改"、"change"、"edit"、"modify"、"改一下"等词 → 必须匹配"修改"操作
+#    - 输入包含"取消"、"no"、"n"、"cancel"、"quit"、"不了"、"不要"等词 → 必须匹配"取消"操作
+#    - 只有当输入包含"第一"、"第 1"、"第一个"、"第一条"等明确序号时 → 才匹配查看对应序号的操作
+# 4. 如果完全匹配不到任何操作，仅输出"none"，不要输出其他内容
+# """
     try:
         # 调用 AI，超时时间缩短，提升响应速度
         result = llm_instance._llm_call_with_timeout(prompt).strip().lower()

@@ -10,7 +10,10 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 from llm import create_chat_session
-from bug_record_core import BugRecord, BugToolUI
+from bug_record_core import BugRecord
+from ui import QueueUI
+import threading
+import time
 
 # 初始化 Flask
 app = Flask(__name__)
@@ -83,9 +86,21 @@ def list_all_sessions():
 current_session_id = generate_session_id()
 chat_session = get_or_create_session(current_session_id)
 
-# BUG 记录工具
-bug_record = None
-bug_ui = None
+# BUG 记录工具（队列驱动模式）
+bug_ui = QueueUI()
+bug_record = BugRecord(bug_ui)
+
+def _bug_core_loop():
+    """核心线程：运行 BUG 记录工具的同步代码"""
+    while True:
+        user_input = bug_ui.input_queue.get()  # 阻塞等待输入
+        try:
+            bug_record.run(user_input)
+        except Exception as e:
+            bug_ui.output_queue.put(f"[错误] {e}")
+
+# 启动 BUG 工具后台线程
+threading.Thread(target=_bug_core_loop, daemon=True).start()
 
 
 def extract_pdf_content(file_path: str) -> str:
@@ -401,14 +416,254 @@ def read_file():
         return jsonify({"success": False, "error": str(e)})
 
 
+@app.route('/bug_records/images/<path:filename>')
+def bug_records_image(filename):
+    """提供 bug_records/images/ 目录下的图片静态文件服务"""
+    from flask import send_from_directory
+    images_dir = os.path.join(os.path.dirname(__file__), 'bug_records', 'images')
+    return send_from_directory(images_dir, filename)
+
+
+@app.route('/api/bug/image', methods=['POST'])
+def bug_image():
+    """BUG 模式 - 添加图片"""
+    data = request.get_json()
+    file_path = data.get('path')
+    
+    if not file_path or not os.path.exists(file_path):
+        return jsonify({"success": False, "error": "文件不存在"})
+    
+    if not is_image_file(file_path):
+        return jsonify({"success": False, "error": "不是图片文件"})
+    
+    try:
+        # 发送图片指令给 BUG 工具
+        bug_ui.push_input(f"img:{file_path}")
+        
+        # 等待处理
+        time.sleep(0.3)
+        
+        # 发送空行结束图片添加循环
+        bug_ui.push_input("")
+        
+        # 等待处理完成
+        max_wait = 5
+        waited = 0
+        while waited < max_wait:
+            time.sleep(0.2)
+            waited += 0.2
+            if bug_ui.is_waiting_input():
+                break
+        
+        reply = bug_ui.get_output() or f"✅ 已添加图片: {os.path.basename(file_path)}"
+        
+        return jsonify({
+            "success": True,
+            "reply": reply,
+            "file_name": os.path.basename(file_path)
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route('/api/bug/file', methods=['POST'])
+def bug_file():
+    """BUG 模式 - 添加文本文件"""
+    data = request.get_json()
+    file_path = data.get('path')
+    
+    if not file_path or not os.path.exists(file_path):
+        return jsonify({"success": False, "error": "文件不存在"})
+    
+    # 检查是否为文本文件
+    text_extensions = ['.txt', '.log', '.md', '.json', '.xml', '.csv', '.c', '.h', '.py', '.js', '.html', '.css']
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext not in text_extensions:
+        return jsonify({"success": False, "error": "不支持的文件类型"})
+    
+    try:
+        # 发送文件指令给 BUG 工具
+        bug_ui.push_input(f"file:{file_path}")
+        
+        # 等待处理
+        time.sleep(0.3)
+        
+        # 发送空行结束文件添加循环
+        bug_ui.push_input("")
+        
+        # 等待处理完成
+        max_wait = 5
+        waited = 0
+        while waited < max_wait:
+            time.sleep(0.2)
+            waited += 0.2
+            if bug_ui.is_waiting_input():
+                break
+        
+        reply = bug_ui.get_output() or f"✅ 已添加文件: {os.path.basename(file_path)}"
+        
+        return jsonify({
+            "success": True,
+            "reply": reply,
+            "file_name": os.path.basename(file_path)
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route('/api/paste_image', methods=['POST'])
+def paste_image():
+    """普通模式 - 粘贴图片（base64），保存到临时目录"""
+    import base64
+    
+    data = request.get_json()
+    base64_data = data.get('base64')
+    filename = data.get('filename', 'paste.png')
+    
+    if not base64_data:
+        return jsonify({"success": False, "error": "无图片数据"})
+    
+    try:
+        # 解析 base64（可能带有 data:image/xxx;base64, 前缀）
+        if ',' in base64_data:
+            base64_data = base64_data.split(',', 1)[1]
+        
+        # 解码
+        image_bytes = base64.b64decode(base64_data)
+        
+        # 保存到临时文件
+        temp_dir = os.path.join(os.path.dirname(__file__), 'bug_records', 'temp')
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_path = os.path.join(temp_dir, filename)
+        
+        with open(temp_path, 'wb') as f:
+            f.write(image_bytes)
+        
+        return jsonify({
+            "success": True,
+            "reply": f"✅ 已粘贴图片: {filename}，请在输入框中输入问题并发送",
+            "file_name": filename,
+            "temp_path": temp_path
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route('/api/bug/paste_image', methods=['POST'])
+def bug_paste_image():
+    """BUG 模式 - 粘贴图片（base64）"""
+    import base64
+    
+    data = request.get_json()
+    base64_data = data.get('base64')
+    filename = data.get('filename', 'paste.png')
+    
+    if not base64_data:
+        return jsonify({"success": False, "error": "无图片数据"})
+    
+    try:
+        # 解析 base64（可能带有 data:image/xxx;base64, 前缀）
+        if ',' in base64_data:
+            base64_data = base64_data.split(',', 1)[1]
+        
+        # 解码
+        image_bytes = base64.b64decode(base64_data)
+        
+        # 保存到临时文件
+        temp_dir = os.path.join(os.path.dirname(__file__), 'bug_records', 'temp')
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_path = os.path.join(temp_dir, filename)
+        
+        with open(temp_path, 'wb') as f:
+            f.write(image_bytes)
+        
+        # 发送图片指令给 BUG 工具
+        bug_ui.push_input(f"img:{temp_path}")
+        
+        # 等待处理
+        time.sleep(0.3)
+        
+        # 发送空行结束图片添加循环
+        bug_ui.push_input("")
+        
+        # 等待处理完成
+        max_wait = 5
+        waited = 0
+        while waited < max_wait:
+            time.sleep(0.2)
+            waited += 0.2
+            if bug_ui.is_waiting_input():
+                break
+        
+        reply = bug_ui.get_output() or f"✅ 已粘贴图片: {filename}"
+        
+        # 临时文件保留在 bug_records/temp/ 目录，等待 BUG 记录保存时复制到正式目录
+        
+        return jsonify({
+            "success": True,
+            "reply": reply,
+            "file_name": filename,
+            "temp_path": temp_path
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route('/api/bug/cancel_paste', methods=['POST'])
+def bug_cancel_paste():
+    """取消粘贴图片 - 清理临时文件"""
+    data = request.get_json()
+    filename = data.get('filename')
+    
+    if not filename:
+        return jsonify({"success": True})
+    
+    try:
+        temp_dir = os.path.join(os.path.dirname(__file__), 'bug_records', 'temp')
+        temp_path = os.path.join(temp_dir, filename)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
 @app.route('/api/bug/input', methods=['POST'])
 def bug_input():
-    """BUG 模式 - 接收输入"""
+    """BUG 模式 - 接收输入并处理"""
     data = request.get_json()
     text = (data.get('text') or '').strip()
     
-    # TODO: 实现 BUG 工具逻辑
-    return jsonify({"success": True, "message": f"已接收输入: {text}"})
+    if not text:
+        return jsonify({"success": False, "error": "输入不能为空"})
+    
+    try:
+        # 推送输入到核心线程
+        bug_ui.push_input(text)
+        
+        # 等待核心线程处理（直到它等待下一次输入）
+        max_wait = 30
+        waited = 0
+        while waited < max_wait:
+            time.sleep(0.2)
+            waited += 0.2
+            # 核心程序在等待输入，说明本次处理完成
+            if bug_ui.is_waiting_input():
+                break
+        
+        # 获取输出
+        reply = bug_ui.get_output() or "已处理"
+        waiting = bug_ui.is_waiting_input()
+        prompt = bug_ui.get_input_prompt() if waiting else ""
+        
+        return jsonify({
+            "success": True, 
+            "reply": reply,
+            "waiting_input": waiting,
+            "input_prompt": prompt
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
 
 
 # ==================== 主入口 ====================

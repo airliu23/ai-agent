@@ -96,6 +96,46 @@ const api = {
         return res.json();
     },
 
+    // BUG 模式 - 添加图片
+    async add_bug_image(path) {
+        const res = await fetch(`${API_BASE}/api/bug/image`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path })
+        });
+        return res.json();
+    },
+
+    // BUG 模式 - 添加文本文件
+    async add_bug_file(path) {
+        const res = await fetch(`${API_BASE}/api/bug/file`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path })
+        });
+        return res.json();
+    },
+
+    // BUG 模式 - 粘贴图片（base64）
+    async bug_paste_image(base64Data, filename) {
+        const res = await fetch(`${API_BASE}/api/bug/paste_image`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ base64: base64Data, filename })
+        });
+        return res.json();
+    },
+
+    // 普通模式 - 粘贴图片（base64）
+    async paste_image(base64Data, filename) {
+        const res = await fetch(`${API_BASE}/api/paste_image`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ base64: base64Data, filename })
+        });
+        return res.json();
+    },
+
     // 选择文件并分析（通过 Electron 对话框）
     async receive_chat_file(question) {
         const filePath = await ipcRenderer.invoke('dialog:openFile');

@@ -26,6 +26,25 @@ const md = new MarkdownIt({
     typographer: true
 })
 
+// 自定义图片渲染：将 bug_records 相对路径转为 Flask 后端绝对 URL
+const BACKEND_URL = 'http://127.0.0.1:5678'
+const defaultImageRenderer = md.renderer.rules.image || function(tokens, idx, options, env, self) {
+    return self.renderToken(tokens, idx, options)
+}
+md.renderer.rules.image = (tokens, idx, options, env, self) => {
+    const token = tokens[idx]
+    const srcIdx = token.attrIndex('src')
+    const altIdx = token.attrIndex('alt')
+    let src = srcIdx >= 0 ? token.attrs[srcIdx][1] : ''
+    const alt = altIdx >= 0 ? token.attrs[altIdx][1] : ''
+
+    // 将 images/BUG_xxx/img_x.xxx 形式的相对路径转为 Flask 后端绝对 URL
+    if (src && src.startsWith('images/')) {
+        src = `${BACKEND_URL}/bug_records/${src}`
+    }
+    return `<img src="${src}" alt="${alt}" style="max-width:100%;border-radius:6px;margin:4px 0;">`
+}
+
 // 自定义代码块渲染
 md.renderer.rules.fence = (tokens, idx) => {
     const token = tokens[idx]
@@ -65,8 +84,10 @@ export default {
             }
             let html = md.render(String(this.content))
             return DOMPurify.sanitize(html, {
-                ADD_TAGS: ['button'],
-                ADD_ATTR: ['onclick', 'title', 'data-code-id']
+                ADD_TAGS: ['button', 'img'],
+                ADD_ATTR: ['onclick', 'title', 'data-code-id', 'src', 'alt'],
+                ALLOW_DATA_ATTR: false,
+                FORCE_BODY: false,
             })
         },
         copyIcon() {

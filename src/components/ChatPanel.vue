@@ -37,7 +37,12 @@
                 <!-- 文件预览 -->
                 <div class="pending-file" v-if="pendingFile">
                     <div class="pending-file-info">
-                        <span class="pending-file-icon">{{ pendingFile.isImage ? '🖼️' : '📄' }}</span>
+                        <!-- 粘贴图片显示缩略图 -->
+                        <img v-if="pendingFile.previewUrl" 
+                             :src="pendingFile.previewUrl" 
+                             class="pending-file-thumbnail" 
+                             alt="预览" />
+                        <span v-else class="pending-file-icon">{{ pendingFile.isImage ? '🖼️' : '📄' }}</span>
                         <div class="pending-file-detail">
                             <span class="pending-file-name">{{ pendingFile.name }}</span>
                             <span class="pending-file-size">{{ pendingFile.size }}</span>
@@ -52,6 +57,7 @@
                     :placeholder="pendingFile ? '输入对该文件的问题，然后发送...' : placeholder"
                     @input="autoResize"
                     @keydown="handleKeydown"
+                    @paste="handlePaste"
                 ></textarea>
                 <div class="input-toolbar">
                     <div class="toolbar-left">
@@ -128,6 +134,38 @@ export default {
                 this.handleSend()
             }
         },
+        async handlePaste(e) {
+            const items = e.clipboardData?.items
+            if (!items) return
+            
+            for (const item of items) {
+                if (item.type.startsWith('image/')) {
+                    e.preventDefault()
+                    const blob = item.getAsFile()
+                    if (blob) {
+                        // 生成预览 URL 和文件信息
+                        const previewUrl = URL.createObjectURL(blob)
+                        const ext = blob.type.split('/')[1] || 'png'
+                        const filename = `paste_${Date.now()}.${ext}`
+                        const size = blob.size < 1024 
+                            ? `${blob.size} B` 
+                            : blob.size < 1024 * 1024 
+                                ? `${(blob.size / 1024).toFixed(1)} KB`
+                                : `${(blob.size / 1024 / 1024).toFixed(1)} MB`
+                        
+                        // 设置为待发送文件（包含 blob 数据）
+                        this.pendingFile = {
+                            name: filename,
+                            size: size,
+                            isImage: true,
+                            blob: blob,
+                            previewUrl: previewUrl
+                        }
+                    }
+                    return
+                }
+            }
+        },
         handleSend() {
             const text = this.inputValue.trim()
             
@@ -135,7 +173,22 @@ export default {
             if (this.pendingFile) {
                 this.inputValue = ''
                 this.$refs.inputText.style.height = 'auto'
-                this.$emit('sendFile', { path: this.pendingFile.path, question: text })
+                
+                // 粘贴的图片（有 blob）
+                if (this.pendingFile.blob) {
+                    this.$emit('pasteImage', this.pendingFile.blob)
+                } else if (this.pendingFile.path) {
+                    // 选择的文件（有 path）
+                    this.$emit('sendFile', { path: this.pendingFile.path, question: text })
+                } else {
+                    // 无效的待发送文件
+                    console.error('Invalid pending file:', this.pendingFile)
+                }
+                
+                // 清理预览 URL
+                if (this.pendingFile.previewUrl) {
+                    URL.revokeObjectURL(this.pendingFile.previewUrl)
+                }
                 this.pendingFile = null
                 return
             }
@@ -154,6 +207,9 @@ export default {
             this.pendingFile = fileInfo
         },
         removePendingFile() {
+            if (this.pendingFile?.previewUrl) {
+                URL.revokeObjectURL(this.pendingFile.previewUrl)
+            }
             this.pendingFile = null
         },
         addMessage(type, content) {
@@ -433,6 +489,14 @@ export default {
 
 .pending-file-icon {
     font-size: 24px;
+}
+
+.pending-file-thumbnail {
+    width: 48px;
+    height: 48px;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-secondary);
 }
 
 .pending-file-detail {
